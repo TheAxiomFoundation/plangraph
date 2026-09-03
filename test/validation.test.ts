@@ -238,3 +238,13 @@ describe("prototype-safe ids", () => {
     expect(Object.hasOwn(result.scenarios[0].unlocks, "__proto__")).toBe(true);
   });
 });
+
+describe("per-year loaded cost", () => {
+  it("rejects an empty or negative schedule at its path and carries a good one through", () => {
+    expectRejectedAt((raw) => (raw.seats[0].loadedAnnualByYear = []), "plan.seats[0].loadedAnnualByYear");
+    expectRejectedAt((raw) => (raw.seats[0].loadedAnnualByYear = [1, -2]), "plan.seats[0].loadedAnnualByYear[1]");
+    const raw = rawStudio();
+    raw.seats[0].loadedAnnualByYear = [100, 110];
+    expect(parsePlan(raw).seats[0].loadedAnnualByYear).toEqual([100, 110]);
+  });
+});

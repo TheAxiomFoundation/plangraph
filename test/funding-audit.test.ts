@@ -8,6 +8,7 @@ import {
   fundingYears,
   ledger,
   monthlyLoaded,
+  seatMonthlyCost,
   report,
   schedule,
   type Plan,
@@ -36,6 +37,19 @@ describe("defensive funding-clock audit", () => {
     expect(monthlyLoaded(plan, 1_200, 14)).toBe(100);
     expect(monthlyLoaded(plan, 1_200, 15)).toBe(110);
     expect(monthlyLoaded(plan, 1_200, 27)).toBeCloseTo(121, 12);
+  });
+
+  it("uses a seat's per-year loaded cost when the source escalates salary before loading it", () => {
+    const seat = { id: "x", title: "X", loadedAnnual: 1_200, loadedAnnualByYear: [1_200, 1_500], costBasis: "D" as const, hireMonths: [0], capacityFte: 1, fallback: null };
+    const plan = fixture({ escalation: { rate: 0.1, basis: "A" }, seats: [seat] });
+    expect(seatMonthlyCost(plan, seat, 0)).toBe(100); // before the funding year opens: year 1
+    expect(seatMonthlyCost(plan, seat, 14)).toBe(100);
+    expect(seatMonthlyCost(plan, seat, 15)).toBe(125); // year 2 from the schedule, not 1,200 × 1.1
+    expect(seatMonthlyCost(plan, seat, 27)).toBe(125); // the last value holds
+    const flat = { ...seat, loadedAnnualByYear: undefined };
+    expect(seatMonthlyCost(plan, flat, 15)).toBe(110);
+    const l = ledger(plan, schedule(plan, AS_PLANNED));
+    expect(l.labor[15]).toBe(125);
   });
 
   it("A7 exposes only real funding-year endpoints", () => {

@@ -46,6 +46,13 @@ export interface SeatDef {
   title: string;
   /** Fully loaded annual cost of one seat in the first funding year. */
   loadedAnnual: number;
+  /**
+   * Loaded annual cost per funding year (year 1 first; the last value holds), for sources
+   * that escalate salary and then load it, so the loaded cost is not a constant multiple of
+   * salary. When present it replaces loadedAnnual × (1 + escalation)^(year − 1); months
+   * before the funding year opens use year 1.
+   */
+  loadedAnnualByYear?: number[];
   costBasis: Basis;
   /** Month index each seat in the role is hired. Seats in place before the plan use 0. */
   hireMonths: number[];

@@ -45,7 +45,7 @@ The package is ESM-only and needs Node 20 or newer. The root export includes
 
 | Node | What it carries |
 |---|---|
-| Seat | `loadedAnnual` cost, `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. |
+| Seat | `loadedAnnual` cost (or `loadedAnnualByYear`, one value per funding year with the last holding, for sources that escalate salary and then load it), `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. |
 | Work item | `earliest` month, a finite `duration` or `standing` (runs to the horizon), `predecessors` with optional lag, `demands` in FTE per month per seat, an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, and a `circle`, its priority group. |
 | Revenue stream | `unlockedBy` an item, `price`, recurring annual `volumeByYear` after unlock, `rampMonths`. |
 | Funding line | dollars `byMonth`, `counted` by default or overridden by a scenario. |

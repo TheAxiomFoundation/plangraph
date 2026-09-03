@@ -2,7 +2,7 @@
 // year, burn while items run, revenue after the unlocking item completes, funding on its own
 // clock, and the cash line that results. Monthly, in dollars, deterministic.
 
-import { fundingYear, has, table, type Calendar, type Plan } from "./model.js";
+import { fundingYear, has, table, type Calendar, type Plan, type SeatDef } from "./model.js";
 import { seatsHired, type Schedule } from "./schedule.js";
 
 export interface Ledger {
@@ -36,6 +36,17 @@ export function monthlyLoaded(plan: Plan, loadedAnnual: number, m: number): numb
   return finiteResult((loadedAnnual * (1 + plan.escalation.rate) ** y) / 12, `monthly loaded cost at month ${m}`);
 }
 
+/** Loaded monthly cost of one seat in month m: its per-year schedule when it has one, else the escalated flat rate. */
+export function seatMonthlyCost(plan: Plan, seat: SeatDef, m: number): number {
+  const byYear = seat.loadedAnnualByYear;
+  if (byYear && byYear.length > 0) {
+    const y = Math.max(0, fundingYear(plan.calendar, m) - 1);
+    const annual = byYear[Math.min(y, byYear.length - 1)];
+    return finiteResult(annual / 12, `monthly loaded cost of "${seat.id}" at month ${m}`);
+  }
+  return monthlyLoaded(plan, seat.loadedAnnual, m);
+}
+
 export function ledger(plan: Plan, s: Schedule): Ledger {
   const H = plan.calendar.horizonMonths;
   const zeros = () => new Array(H).fill(0) as number[];
@@ -46,7 +57,7 @@ export function ledger(plan: Plan, s: Schedule): Ledger {
     for (let m = 0; m < H; m++) {
       const n = seatsHired(s.hires[seat.id], m);
       addFinite(headcount, m, n, "headcount");
-      addFinite(labor, m, n * monthlyLoaded(plan, seat.loadedAnnual, m), "labor cost");
+      addFinite(labor, m, n * seatMonthlyCost(plan, seat, m), "labor cost");
     }
   }
 

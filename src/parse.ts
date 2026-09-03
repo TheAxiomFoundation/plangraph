@@ -125,6 +125,7 @@ export function parsePlan(input: unknown): Plan {
     need(seat.id !== "external", `${path}.id`, '"external" is reserved for the external-carrier sentinel');
     requiredString(seat.title, `${path}.title`, true);
     need(finite(seat.loadedAnnual) && seat.loadedAnnual >= 0, `${path}.loadedAnnual`, "must be a finite number >= 0");
+    if (seat.loadedAnnualByYear !== undefined) numberArray(seat.loadedAnnualByYear, `${path}.loadedAnnualByYear`, { nonEmpty: true, min: 0 });
     basis(seat.costBasis, `${path}.costBasis`);
     numberArray(seat.hireMonths, `${path}.hireMonths`, { integer: true, min: 0 });
     need(finite(seat.capacityFte), `${path}.capacityFte`, "must be a finite number");
