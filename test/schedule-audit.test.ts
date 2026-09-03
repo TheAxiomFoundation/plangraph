@@ -517,6 +517,13 @@ describe("demand profiles", () => {
     const leveled = scheduled(plan, "a", LEVELED);
     expect(leveled.start).toBe(4);
     expect(leveled.binding).toEqual({ kind: "capacity", seat: "cto", carrier: "cto" });
+    // A contribution from the unhired seat does not block an item someone else owns.
+    const helped = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      seats: [role("x"), role("cto", { hireMonths: [4], unlevelled: true })],
+      items: [work("a", { duration: 2, demands: [{ seat: "x", fte: 0.5, basis: "A" }, { seat: "cto", fte: 0.05, basis: "A" }] })],
+    });
+    expect(scheduled(helped, "a", LEVELED).start).toBe(0);
     // Once the seat exists it absorbs any overload.
     const busy = fixture({
       calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },

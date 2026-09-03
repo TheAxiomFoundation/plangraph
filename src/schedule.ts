@@ -228,9 +228,10 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       let worst: { short: number; seat: SeatId; carrier: SeatId } | null = null;
       for (const [carrier, demand] of landed) {
         const load = loads.get(carrier);
-        // Leadership absorbs rather than slips, so its overload is reported, not scheduled around;
-        // but an unhired leadership seat has nobody to absorb, and its work waits for the hire.
-        if (unlevelled.has(carrier) && (load?.capacity[m] ?? 0) > 0) continue;
+        // Leadership absorbs rather than slips, so its overload is reported, not scheduled around.
+        // The one exception: an item OWNED by a leadership seat that is not yet hired waits for
+        // the hire; a contribution from an unhired leadership seat is unstaffed, not blocking.
+        if (unlevelled.has(carrier) && ((load?.capacity[m] ?? 0) > 0 || carrier !== ownerOf(i))) continue;
         const short = load ? load.demand[m] + demand.fte - load.capacity[m] : demand.fte;
         const earlier =
           worst !== null &&
