@@ -193,6 +193,8 @@ export interface Scenario {
   gist: string;
   /** Whole months added to every hire in the role; negative pulls forward. Keys are seat ids. */
   hireDelay?: Record<SeatId, number>;
+  /** Roles that do not exist in this scenario: never hired, never costed; their demand lands on their fallback. */
+  dropSeats?: SeatId[];
   /** Multiply every stream's volumes. Positive. */
   volumeScale?: number;
   /** Funding lines to count, by id, overriding each line's default. */
