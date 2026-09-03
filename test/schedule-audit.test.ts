@@ -452,3 +452,26 @@ describe("dropSeats and unlevelled", () => {
     expect(() => parsePlan({ ...plan, seats: [{ ...plan.seats[0], unlevelled: "yes" }, plan.seats[1]] })).toThrow(/unlevelled/);
   });
 });
+
+describe("demand profiles", () => {
+  it("books FTE by quarter of the item's run, the last value holding, and parses the shape", async () => {
+    const { AS_PLANNED, demandAt, parsePlan, schedule } = await import("../src/index");
+    const plan = parsePlan({
+      name: "profile",
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      circles: ["a"],
+      escalation: { rate: 0, basis: "A" },
+      seats: [{ id: "x", title: "X", loadedAnnual: 120_000, costBasis: "A", hireMonths: [0], capacityFte: 1, fallback: null }],
+      items: [{ id: "w", lane: "l", label: "Work", circle: "a", earliest: 2, duration: 9, standing: false, underway: false, predecessors: [], demands: [{ seat: "x", fte: 0.5, profile: [0.8, 0.2], basis: "A" }] }],
+      streams: [], funding: [], nonLabor: [], scenarios: [AS_PLANNED],
+    });
+    const s = schedule(plan, AS_PLANNED);
+    const load = s.loads[0].demand;
+    expect(load.slice(2, 5)).toEqual([0.8, 0.8, 0.8]);
+    expect(load.slice(5, 11)).toEqual([0.2, 0.2, 0.2, 0.2, 0.2, 0.2]);
+    expect(load[1]).toBe(0);
+    expect(demandAt(plan.items[0].demands[0], 0)).toBe(0.8);
+    expect(demandAt(plan.items[0].demands[0], 40)).toBe(0.2);
+    expect(() => parsePlan({ ...plan, items: [{ ...plan.items[0], demands: [{ ...plan.items[0].demands[0], profile: [] }] }] })).toThrow(/profile/);
+  });
+});

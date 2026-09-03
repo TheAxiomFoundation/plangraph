@@ -74,10 +74,20 @@ export interface SeatDef {
 
 export interface Demand {
   seat: SeatId;
-  /** FTE per month while the item runs. */
+  /** FTE per month while the item runs, when the demand is flat. */
   fte: number;
+  /**
+   * FTE by quarter of the item's run, first quarter first, the last value holding: a shape
+   * instead of a flat rate (front-loaded design, a build, a tail). When present it replaces
+   * `fte` month by month; `fte` stays as the number a summary shows.
+   */
+  profile?: number[];
   basis: Basis;
 }
+
+/** The FTE a demand asks for in month k of its item's run. */
+export const demandAt = (d: Demand, k: number): number =>
+  d.profile && d.profile.length ? d.profile[Math.min(Math.floor(Math.max(0, k) / 3), d.profile.length - 1)] : d.fte;
 
 export interface Predecessor {
   id: string;

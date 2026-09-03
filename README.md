@@ -49,7 +49,7 @@ directly; `plangraph/node` adds `loadPlanFile`, which reads from `node:fs`.
 | Node | What it carries |
 |---|---|
 | Seat | `loadedAnnual` cost, optionally `loadedAnnualByYear` (one value per funding year, the last holding), which replaces the flat escalation for sources that escalate salary and then load it; `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. `unlevelled: true` marks a leadership seat: leveling never waits for room on it, and its overload is reported instead. |
-| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat, an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, and a `circle`, its priority group. |
+| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat (or a `profile`: FTE by quarter of the run, the last value holding), an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, and a `circle`, its priority group. |
 | Revenue stream | `unlockedBy` an item, `price`, recurring annual `volumeByYear` after unlock, `rampMonths`. |
 | Funding line | dollars `byMonth`, `counted` by default or overridden by a scenario. |
 | Non-labor line | dollars `byYear` on the funding calendar. |

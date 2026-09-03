@@ -163,6 +163,7 @@ export function parsePlan(input: unknown): Plan {
         if (!isObj(demand)) return need(false, demandPath, "must be an object");
         requiredString(demand.seat, `${demandPath}.seat`, true);
         need(finite(demand.fte), `${demandPath}.fte`, "must be a finite number");
+        if ((demand as { profile?: unknown }).profile !== undefined) numberArray((demand as { profile?: unknown }).profile, `${demandPath}.profile`, { nonEmpty: true, min: 0 });
         basis(demand.basis, `${demandPath}.basis`);
       });
     }

@@ -13,7 +13,7 @@
 //
 // Every start records the constraint that bound it. Deterministic: same inputs, same output.
 
-import { has, ownerOf, table, type Plan, type Scenario, type SeatDef, type SeatId, type WorkItem } from "./model.js";
+import { has, ownerOf, table, type Plan, type Scenario, type SeatDef, type SeatId, type WorkItem, demandAt } from "./model.js";
 
 export type Binding =
   | { kind: "declared" }
@@ -177,11 +177,11 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
   };
 
   /** Per-demand placements for one item in one month. Aggregation would lose fallback attribution. */
-  const placements = (i: WorkItem, m: number): Scheduled["carriers"] =>
+  const placements = (i: WorkItem, m: number, start: number): Scheduled["carriers"] =>
     i.demands.map((d) => ({
       seat: d.seat,
       carrier: carrierFor(seatDefs, hires, d.seat, m),
-      fte: finiteResult(d.fte * eff, `demand for item "${i.id}" and seat "${d.seat}"`),
+      fte: finiteResult(demandAt(d, m - start) * eff, `demand for item "${i.id}" and seat "${d.seat}"`),
     }));
 
   /** Whether the whole run fits from `start`; on failure, the carrier with the largest shortfall. */
@@ -189,7 +189,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
     if (!i.standing && start + duration > H) return { ok: false, seat: ownerOf(i), carrier: ownerOf(i) };
     for (let m = start; m < Math.min(start + duration, H); m++) {
       const landed = new Map<SeatId, { fte: number; seat: SeatId }>();
-      for (const p of placements(i, m)) {
+      for (const p of placements(i, m, start)) {
         if (p.carrier === "external") continue;
         const cur = landed.get(p.carrier);
         if (cur) {
@@ -219,7 +219,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
 
   const book = (i: WorkItem, start: number, duration: number) => {
     for (let m = start; m < Math.min(start + duration, H); m++) {
-      for (const p of placements(i, m)) {
+      for (const p of placements(i, m, start)) {
         bookings.push({ item: i.id, circle: i.circle, month: m, ...p });
         if (p.carrier === "external") {
           external[m] = finiteResult(external[m] + p.fte, `external demand at month ${m}`);
@@ -291,7 +291,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       continue;
     }
     book(i, start, duration);
-    const carriers = placements(i, start);
+    const carriers = placements(i, start, start);
     done.set(i.id, { item: i, start, end: Math.min(start + duration, H), duration, beyond: false, binding, carriers });
   }
 
