@@ -1,14 +1,17 @@
 // The planning graph.
 //
-// A plan is a directed acyclic graph of work items over a monthly calendar. Items demand
-// seats; seats exist from a hire month and cost money whether or not they are busy; items
-// depend on other items; finishing an item can unlock a revenue stream; funding arrives on
-// its own clock. A scenario is a set of overrides on that graph. The scheduler is a pure
-// function from (plan, scenario) to a schedule, and every start it produces names the
-// constraint that bound it, so "why is this late" is an output rather than an argument.
+// A valid plan is a directed acyclic graph of work items over a monthly calendar. Items
+// demand seats; seats exist from a hire month and cost money whether or not they are busy;
+// items depend on other items; finishing an item can unlock a revenue stream; funding
+// arrives on its own clock. A scenario is a set of overrides on that graph. The scheduler is
+// a pure function from (plan, scenario) to a schedule, and every start it produces names the
+// constraints that bound it, so "why is this late" is an output rather than an argument.
 //
-// Every number carries a basis: D derived from a source model, A assumed, M measured. An
-// assumed number in a derived-looking place is a bug, and the harness treats it as one.
+// Cost, demand, revenue and funding assumptions carry a basis: D derived from a source
+// model, A assumed, M measured. An assumed number in a derived-looking place is a bug.
+//
+// Months are integers. There is no partial-month proration: a seat hired in month m is on
+// payroll and at full capacity from m.
 
 export type Basis = "D" | "A" | "M";
 
@@ -18,7 +21,7 @@ export interface Calendar {
   startMonth: number; // 1..12
   /** How many months the plan runs. Indices run 0..horizonMonths-1. */
   horizonMonths: number;
-  /** Month index where funding year 1 opens; years are counted from it. */
+  /** Month index where funding year 1 opens; years are counted from it. Must be inside the horizon. */
   fundingYearStartMonth: number;
 }
 
@@ -28,11 +31,11 @@ export const monthIndex = (cal: Calendar, year: number, month: number): number =
 export const monthLabel = (cal: Calendar, m: number): string => {
   const abs = cal.startMonth - 1 + m;
   const year = cal.startYear + Math.floor(abs / 12);
-  const month = (abs % 12) + 1;
+  const month = ((abs % 12) + 12) % 12 + 1;
   return `${year}-${String(month).padStart(2, "0")}`;
 };
 
-/** Funding year of a month index: 1 for the first twelve months from the funding start. */
+/** Funding year of a month index: 1 for the first twelve months from the funding start; 0 or less before it. */
 export const fundingYear = (cal: Calendar, m: number): number =>
   Math.floor((m - cal.fundingYearStartMonth) / 12) + 1;
 
@@ -49,9 +52,10 @@ export interface SeatDef {
   /** Capacity of one seat, in FTE. */
   capacityFte: number;
   /**
-   * Who carries this seat's demand before it is hired. A seat id means the load lands on that
-   * person; "external" means a contractor or firm with no capacity limit modeled; null means
-   * nobody, which the schedule shows as load on an empty seat.
+   * Who carries this role's demand while the role has no hire at all. A seat id means the
+   * load lands on that role; "external" means a contractor or firm, uncapped and uncosted
+   * in this model; null means nobody, so the load shows on the empty role as an overload.
+   * Fallback is all-or-nothing per role: once one seat is hired, all demand stays on the role.
    */
   fallback: SeatId | "external" | null;
 }
@@ -65,7 +69,7 @@ export interface Demand {
 
 export interface Predecessor {
   id: string;
-  /** Months after the predecessor ends before this may start. Default 0. */
+  /** Whole months after the predecessor ends before this may start. Default 0. */
   lag?: number;
 }
 
@@ -75,14 +79,17 @@ export interface WorkItem {
   id: string;
   lane: string;
   label: string;
-  /** Priority group; the plan lists circles in booking order. */
+  /** Priority group; the plan lists circles in booking order. Must be one of plan.circles. */
   circle: Circle;
+  /** The accountable seat. Defaults to the first demand's seat; must be one of the demands. */
+  owner?: SeatId;
   /** Declared earliest start, month index. For items underway this is the actual start. */
   earliest: number;
-  /** Months the item runs. Ignored for standing items, which run to the horizon. */
+  /** Whole months the item runs. Ignored for standing items, which run to the horizon. */
   duration: number;
   standing: boolean;
   predecessors: Predecessor[];
+  /** One demand per seat. */
   demands: Demand[];
   /** True when the item has already begun: its start is a fact, not a decision. */
   underway: boolean;
@@ -97,16 +104,16 @@ export interface RevenueStream {
   unlockedBy: string;
   unit: string;
   price: { usd: number; basis: Basis; note: string };
-  /** Annual volume in the first, second, third... year after unlock; the last value holds. */
+  /** Annual volume in the first, second, third... year after unlock; the last value holds. At least one. */
   volumeByYear: { units: number[]; basis: Basis; note: string };
-  /** Months over which the first year's volume ramps from zero. */
+  /** Whole months over which the first year's volume ramps linearly from zero. */
   rampMonths: number;
 }
 
 export interface FundingLine {
   id: string;
   label: string;
-  /** Dollars by month index; shorter arrays are zero-padded. */
+  /** Dollars by month index; shorter arrays are zero-padded, longer ones truncated. */
   byMonth: number[];
   basis: Basis;
   note: string;
@@ -117,7 +124,7 @@ export interface FundingLine {
 export interface NonLaborLine {
   id: string;
   label: string;
-  /** Dollars by funding year; years beyond the array hold the last value. */
+  /** Dollars by funding year; years beyond the array hold the last value. Nothing before the funding start. */
   byYear: number[];
   basis: Basis;
   note: string;
@@ -133,28 +140,62 @@ export interface Reference {
   note: string;
 }
 
+/** Thresholds the harness uses. Every one has a default; a plan can set its own. */
+export interface LintPolicy {
+  /** W101 fires when a seat is over capacity for at least this many months... */
+  overloadMonths: number;
+  /** ...or by at least this many FTE in any month. */
+  overloadPeakFte: number;
+  /** W102: months a new hire may sit under 10% load. */
+  idleMonths: number;
+  /** W103: months an item may run before its owner exists, with a person carrying it. */
+  lateOwnerMonths: number;
+  /** W104: months an item may start after its declared month. */
+  slipMonths: number;
+  /** W109: items one owner may run at once. */
+  wideOwnerItems: number;
+  /** W106: share of revenue on assumed volumes that is worth saying. */
+  assumedRevenueShare: number;
+  /** W115: FTE-months of seats in the last circle that are worth saying. */
+  lastCircleFteMonths: number;
+  /** W116: a principal's demand as a multiple of one seat's capacity. */
+  principalLoad: number;
+}
+
+export const DEFAULT_LINT: LintPolicy = {
+  overloadMonths: 3,
+  overloadPeakFte: 0.5,
+  idleMonths: 3,
+  lateOwnerMonths: 6,
+  slipMonths: 3,
+  wideOwnerItems: 4,
+  assumedRevenueShare: 0.8,
+  lastCircleFteMonths: 12,
+  principalLoad: 1.5,
+};
+
 export interface Scenario {
   id: string;
   name: string;
   gist: string;
-  /** Months added to every hire in the role; negative pulls forward. */
+  /** Whole months added to every hire in the role; negative pulls forward. Keys are seat ids. */
   hireDelay?: Record<SeatId, number>;
-  /** Multiply every stream's volumes. */
+  /** Multiply every stream's volumes. Positive. */
   volumeScale?: number;
   /** Funding lines to count, by id, overriding each line's default. */
   countFunding?: Record<string, boolean>;
   /** When true, seats' capacity binds: overloaded work is pushed later in priority order. */
   level: boolean;
-  /** Multiply every planned (not underway, not standing) duration. */
+  /** Multiply every planned (not underway, not standing) duration. Positive. */
   durationScale?: number;
-  /** Multiply every demand, to test the effort assumption. */
+  /** Multiply every demand, to test the effort assumption. Positive. */
   effortScale?: number;
 }
 
 export interface Plan {
   name: string;
   calendar: Calendar;
-  /** Circles in booking priority: the first books capacity first when leveling. */
+  /** Circles in booking priority: the first books capacity first when leveling. Every item's circle must be listed. */
   circles: Circle[];
   /** What the plan is checked against, when a source model exists. */
   reference?: Reference;
@@ -165,14 +206,18 @@ export interface Plan {
   nonLabor: NonLaborLine[];
   /** Annual cost escalation from funding year 2. */
   escalation: { rate: number; basis: Basis };
-  /** Scenarios carried with the plan, so a JSON file is self-contained. */
+  /** Cash on hand at month 0. Default 0. */
+  openingCash?: number;
+  /** Harness thresholds. Defaults apply for anything unset. */
+  lint?: Partial<LintPolicy>;
+  /** Scenarios carried with the plan, so a file is self-contained. */
   scenarios?: Scenario[];
 }
 
 export const AS_PLANNED: Scenario = {
   id: "as-planned",
   name: "As planned",
-  gist: "Dependencies and hire dates bind; capacity is reported, not enforced.",
+  gist: "Dependencies bind; unfilled seats hand their work to fallbacks; capacity is reported, not enforced.",
   level: false,
 };
 
@@ -183,6 +228,15 @@ export const LEVELED: Scenario = {
   level: true,
 };
 
-/** The scenarios to run for a plan: its own, else the two defaults. */
+/** The scenarios to run for a plan: its own, else the two defaults. The first is the baseline. */
 export const scenariosOf = (plan: Plan): Scenario[] =>
   plan.scenarios && plan.scenarios.length ? plan.scenarios : [AS_PLANNED, LEVELED];
+
+export const lintPolicy = (plan: Plan): LintPolicy => ({ ...DEFAULT_LINT, ...(plan.lint ?? {}) });
+
+/** The accountable seat of an item. */
+export const ownerOf = (item: WorkItem): SeatId => item.owner ?? item.demands[0]?.seat ?? "";
+
+/** A record with no prototype, so user ids like "__proto__" or "toString" are ordinary keys. */
+export const table = <T>(): Record<string, T> => Object.create(null) as Record<string, T>;
+export const has = (o: object | undefined, k: string): boolean => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
