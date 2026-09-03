@@ -3,7 +3,7 @@
 // not make sense somewhere. Info is a fact worth knowing. Each finding names its subject and
 // says what to do, so an agent editing nodes gets the same feedback a reviewer would give.
 
-import { byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
+import { atFundingYearEnd, byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
 import { monthLabel, type Plan, type SeatId } from "./model.js";
 import { overloads, type Schedule } from "./schedule.js";
 
@@ -132,7 +132,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const H = cal.horizonMonths;
   const label = (m: number) => monthLabel(cal, m);
   const byId = new Map(s.items.map((x) => [x.item.id, x]));
-  const years = fundingYears(plan);
+  const years = fundingYears(cal);
   const y1End = cal.fundingYearStartMonth + 12;
 
   // W101 overloaded seats.
@@ -171,7 +171,9 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (it.beyond) continue;
     for (const c of it.carriers) {
       if (c.carrier !== c.seat && c.carrier !== "external") {
-        const firstHire = Math.min(...(s.hires[c.seat] ?? [H]));
+        const hires = s.hires[c.seat] ?? [];
+        let firstHire = hires[0] ?? H;
+        for (let k = 1; k < hires.length; k++) firstHire = Math.min(firstHire, hires[k]);
         const wait = firstHire - it.start;
         if (wait >= 6) {
           out.push({ code: "W103", severity: "warn", subject: it.item.id, message: `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${c.fte.toFixed(2)} FTE meanwhile.`, hint: "Pull the hire forward, fund a contractor, or move the start." });
@@ -207,7 +209,8 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   // W105 cash goes negative.
   const firstNeg = l.cash.findIndex((c) => c < 0);
   if (firstNeg >= 0) {
-    const trough = Math.min(...l.cash);
+    let trough = l.cash[firstNeg];
+    for (let m = firstNeg + 1; m < l.cash.length; m++) trough = Math.min(trough, l.cash[m]);
     out.push({ code: "W105", severity: "warn", subject: s.scenario.id, message: `Cash turns negative in ${label(firstNeg)}; trough ${(trough / 1e6).toFixed(2)}M.`, hint: "Funding arrives later than the seats, or the seats arrive earlier than the funding." });
   }
 
@@ -253,25 +256,29 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
 
   // W110–W112 drift against the reference model, when the plan names one.
   const ref = plan.reference;
-  const costN = byFundingYear(plan, l.cost, years).reduce((a, b) => a + b, 0);
   if (ref) {
     const n = ref.headcountByYear.length;
-    const hc = ref.headcountByYear.map((_, k) => l.headcount[Math.min(cal.fundingYearStartMonth + 12 * k + 11, H - 1)]);
-    if (hc.some((h, k) => h !== ref.headcountByYear[k])) {
-      out.push({ code: "W110", severity: "info", subject: s.scenario.id, message: `Headcount at each year end ${hc.join("/")} against the reference ${ref.headcountByYear.join("/")}.`, hint: "Expected under hire-delay scenarios; a drift as planned means the roster moved." });
+    const hc = atFundingYearEnd(l.headcount, cal, n);
+    const complete = hc.slice(0, Math.min(years, n));
+    if (complete.some((h, k) => h !== null && h !== ref.headcountByYear[k])) {
+      out.push({ code: "W110", severity: "info", subject: s.scenario.id, message: `Headcount at ${complete.length} complete funding-year end${complete.length === 1 ? "" : "s"} ${complete.join("/")} against the reference ${ref.headcountByYear.slice(0, complete.length).join("/")}.`, hint: "Expected under hire-delay scenarios; a drift as planned means the roster moved." });
     }
-    const costRef = byFundingYear(plan, l.cost, n).reduce((a, b) => a + b, 0);
-    const ratio = costRef / ref.gross;
-    if (ratio < 0.85 || ratio > 1.15) {
-      out.push({ code: "W111", severity: "info", subject: s.scenario.id, message: `${n}-year cost ${(costRef / 1e6).toFixed(1)}M is ${Math.round((ratio - 1) * 100)}% off the reference ${(ref.gross / 1e6).toFixed(1)}M.`, hint: "Labor is derived; the non-labor lines are the assumed part. Reconcile there first." });
-    }
-    const nl = byFundingYear(plan, l.nonLabor.map((v, m) => v + l.burn[m]), n).reduce((a, b) => a + b, 0);
-    const share = costRef > 0 ? nl / costRef : 0;
-    if (share < ref.nonLaborShare[0] || share > ref.nonLaborShare[1]) {
-      out.push({ code: "W112", severity: "info", subject: s.scenario.id, message: `Non-labor is ${Math.round(share * 100)}% of cost over ${n} years.`, hint: ref.note });
+
+    // The reference gross and share describe its full span, so do not compare a shorter
+    // horizon with those multi-year figures.
+    if (years >= n) {
+      const costRef = byFundingYear(l.cost, cal, n).reduce((a, b) => a + b, 0);
+      const ratio = costRef / ref.gross;
+      if (ratio < 0.85 || ratio > 1.15) {
+        out.push({ code: "W111", severity: "info", subject: s.scenario.id, message: `${n}-year cost ${(costRef / 1e6).toFixed(1)}M is ${Math.round((ratio - 1) * 100)}% off the reference ${(ref.gross / 1e6).toFixed(1)}M.`, hint: "Labor is derived; the non-labor lines are the assumed part. Reconcile there first." });
+      }
+      const nl = byFundingYear(l.nonLabor.map((v, m) => v + l.burn[m]), cal, n).reduce((a, b) => a + b, 0);
+      const share = costRef > 0 ? nl / costRef : 0;
+      if (share < ref.nonLaborShare[0] || share > ref.nonLaborShare[1]) {
+        out.push({ code: "W112", severity: "info", subject: s.scenario.id, message: `Non-labor is ${Math.round(share * 100)}% of cost over ${n} years.`, hint: ref.note });
+      }
     }
   }
-  void costN;
 
   // W115 seats spent on work outside the last circle, when the plan reserves one for it.
   const last = plan.circles[plan.circles.length - 1];

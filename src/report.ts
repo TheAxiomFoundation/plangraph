@@ -1,19 +1,27 @@
 // One report per scenario: the aggregates a planner reads first, then the findings. The CLI
 // prints it; a program can take it as data.
 
-import { atFundingYearEnd, byFundingYear, fundingYears, ledger, type Ledger } from "./economics.js";
+import { afterFundingYears, atFundingYearEnd, beforeFunding, byFundingYear, fundingYears, ledger, type Ledger } from "./economics.js";
 import { countBy, lintPlan, lintSchedule, type Finding, type Severity } from "./lint.js";
 import { monthLabel, scenariosOf, table, type Plan, type Scenario } from "./model.js";
 import { overloads, schedule, slips, type Schedule, type Slip } from "./schedule.js";
+
+export interface PeriodTotals {
+  cost: number;
+  revenue: number;
+  funding: number;
+}
 
 export interface ScenarioReport {
   scenario: Scenario;
   schedule: Schedule;
   ledger: Ledger;
-  headcountByYearEnd: number[];
+  headcountByYearEnd: Array<number | null>;
+  preFunding: PeriodTotals;
   costByYear: number[];
   revenueByYear: number[];
   fundingByYear: number[];
+  trailing: PeriodTotals;
   cashTrough: { usd: number; month: string };
   unlocks: Record<string, string | null>;
   slips: Slip[];
@@ -31,7 +39,8 @@ export interface Report {
 }
 
 export function report(plan: Plan, only?: string): Report {
-  const years = fundingYears(plan);
+  const cal = plan.calendar;
+  const years = fundingYears(cal);
   const planFindings = lintPlan(plan);
   const planErrors = countBy(planFindings).error;
   if (planErrors > 0) return { plan: plan.name, years, planFindings, scenarios: [], errors: planErrors };
@@ -45,18 +54,35 @@ export function report(plan: Plan, only?: string): Report {
     const s = sc === all[0] ? base : schedule(plan, sc);
     const l = ledger(plan, s);
     const findings = lintSchedule(plan, s, l);
-    const trough = Math.min(...l.cash);
+    let trough = l.cash[0] ?? plan.openingCash ?? 0;
+    let troughMonth = 0;
+    for (let m = 1; m < l.cash.length; m++) {
+      if (l.cash[m] < trough) {
+        trough = l.cash[m];
+        troughMonth = m;
+      }
+    }
     const unlocks = table<string | null>();
     for (const [id, month] of Object.entries(l.unlocks)) unlocks[id] = month === null ? null : monthLabel(plan.calendar, month);
     out.push({
       scenario: sc,
       schedule: s,
       ledger: l,
-      headcountByYearEnd: atFundingYearEnd(plan, l.headcount, years),
-      costByYear: byFundingYear(plan, l.cost, years),
-      revenueByYear: byFundingYear(plan, l.revenue, years),
-      fundingByYear: byFundingYear(plan, l.funding, years),
-      cashTrough: { usd: trough, month: monthLabel(plan.calendar, l.cash.indexOf(trough)) },
+      headcountByYearEnd: atFundingYearEnd(l.headcount, cal, years),
+      preFunding: {
+        cost: beforeFunding(l.cost, cal),
+        revenue: beforeFunding(l.revenue, cal),
+        funding: beforeFunding(l.funding, cal),
+      },
+      costByYear: byFundingYear(l.cost, cal, years),
+      revenueByYear: byFundingYear(l.revenue, cal, years),
+      fundingByYear: byFundingYear(l.funding, cal, years),
+      trailing: {
+        cost: afterFundingYears(l.cost, cal),
+        revenue: afterFundingYears(l.revenue, cal),
+        funding: afterFundingYears(l.funding, cal),
+      },
+      cashTrough: { usd: trough, month: monthLabel(cal, troughMonth) },
       unlocks,
       slips: slips(base, s),
       overloads: overloads(s).map((o) => ({ seat: o.seat, months: o.months.length, peak: o.peak, first: monthLabel(plan.calendar, o.months[0]) })),

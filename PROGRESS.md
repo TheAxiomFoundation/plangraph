@@ -5,7 +5,7 @@
 - Branch: `review-fixes`
 - Starting point: `06cf875`
 - Audit: `plangraph-review-2026-09-03.out.md`, read in full
-- Current phase: reconciling the funding clock and opening balance
+- Current phase: making lint heuristics measured and policy-driven
 
 ## Done
 
@@ -30,14 +30,19 @@
 - Added explicit per-month bookings, deep fallback/external coverage, the chosen all-or-nothing
   partial-staffing policy, standing metadata, slip, exact revenue, and numeric-closure tests.
 - 43 tests pass; typecheck and the example check are clean.
+- Reworked funding-year helpers around complete twelve-month periods, with explicit
+  pre-funding and trailing totals and nullable unavailable year-end observations.
+- Exposed reconciling cost/revenue/funding period totals in every scenario report, seeded
+  cash with `openingCash`, and stopped incomplete reference spans from fabricating values.
+- Added four shifted-clock, endpoint, reconciliation, and opening-cash tests; 47 tests pass,
+  and typecheck, build, and the example check are clean.
 
 ## Next
 
-1. Reconcile the funding clock and opening cash (A7; B3; D7).
-2. Make lint findings truthful, booking-based, and policy-driven; expose counted external
+1. Make lint findings truthful, booking-based, and policy-driven; expose counted external
    FTE-months in reports (A3, A10; B5, B7; D8).
-3. Harden CLI selection/error behavior and selected-scenario comparisons (A11; D5, D9).
-4. Apply README corrections C1–C15 and document ESM/package semantics.
-5. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
+2. Harden CLI selection/error behavior and selected-scenario comparisons (A11; D5, D9).
+3. Apply README corrections C1–C15 and document ESM/package semantics.
+4. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
    push, open the PR, and monitor checks.
-6. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
+5. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.

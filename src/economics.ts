@@ -2,7 +2,7 @@
 // year, burn while items run, revenue after the unlocking item completes, funding on its own
 // clock, and the cash line that results. Monthly, in dollars, deterministic.
 
-import { fundingYear, has, table, type Plan } from "./model.js";
+import { fundingYear, has, table, type Calendar, type Plan } from "./model.js";
 import { seatsHired, type Schedule } from "./schedule.js";
 
 export interface Ledger {
@@ -120,21 +120,38 @@ export const sumRange = (row: number[], from: number, to: number): number => {
   return t;
 };
 
-/** Totals by funding year 1..years. */
-export function byFundingYear(plan: Plan, row: number[], years = 5): number[] {
-  const f = plan.calendar.fundingYearStartMonth;
-  return Array.from({ length: years }, (_, k) => sumRange(row, f + 12 * k, f + 12 * (k + 1)));
+/** How many complete twelve-month funding years fit inside the horizon. */
+export const fundingYears = (cal: Calendar): number =>
+  Math.max(0, Math.floor((cal.horizonMonths - cal.fundingYearStartMonth) / 12));
+
+/** Total before funding year 1 opens. */
+export const beforeFunding = (row: number[], cal: Calendar): number =>
+  sumRange(row, 0, Math.min(cal.fundingYearStartMonth, cal.horizonMonths));
+
+/** Totals for complete funding years only. */
+export function byFundingYear(row: number[], cal: Calendar, years = fundingYears(cal)): number[] {
+  const count = Math.min(Math.max(0, Math.floor(years)), fundingYears(cal));
+  const f = cal.fundingYearStartMonth;
+  return Array.from({ length: count }, (_, k) => sumRange(row, f + 12 * k, f + 12 * (k + 1)));
 }
 
-/** Value at the last month of each funding year 1..years. */
-export function atFundingYearEnd(plan: Plan, row: number[], years = 5): number[] {
-  const f = plan.calendar.fundingYearStartMonth;
-  return Array.from({ length: years }, (_, k) => row[Math.min(f + 12 * k + 11, row.length - 1)] ?? 0);
-}
+/** Total after the final complete funding year, through the end of the horizon. */
+export const afterFundingYears = (row: number[], cal: Calendar): number => {
+  const from = cal.fundingYearStartMonth + 12 * fundingYears(cal);
+  return sumRange(row, from, cal.horizonMonths);
+};
 
-/** How many funding years fit inside the horizon. */
-export const fundingYears = (plan: Plan): number =>
-  Math.max(1, Math.floor((plan.calendar.horizonMonths - plan.calendar.fundingYearStartMonth) / 12));
+/** Value at each requested funding-year end, or null when that endpoint is unavailable. */
+export function atFundingYearEnd(row: number[], cal: Calendar, years = fundingYears(cal)): Array<number | null> {
+  const count = Math.max(0, Math.floor(years));
+  const f = cal.fundingYearStartMonth;
+  return Array.from({ length: count }, (_, k) => {
+    const month = f + 12 * k + 11;
+    return month < cal.horizonMonths && month < row.length
+      ? finiteResult(row[month], `funding year ${k + 1} endpoint`)
+      : null;
+  });
+}
 
 export const fmtUsd = (n: number): string =>
   Math.abs(n) >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : `$${Math.round(n / 1e3)}k`;
