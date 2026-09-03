@@ -5,7 +5,7 @@
 - Branch: `review-fixes`
 - Starting point: `06cf875`
 - Audit: `plangraph-review-2026-09-03.out.md`, read in full
-- Current phase: hardening CLI usage, preflight, and baseline comparison behavior
+- Current phase: applying README corrections C1–C15
 
 ## Done
 
@@ -44,11 +44,16 @@
   uncosted, and excluded it from W115 internal capacity.
 - Added nine lint/external policy tests; 56 tests pass, and typecheck, build, and the example
   check are clean.
+- Made missing/unknown scenario selection a concise exit-2 usage error and normalized all
+  parse, preflight, and computation failures to one line per error with no stack trace.
+- Kept slips anchored to the plan baseline under selection, added the external FTE-months
+  human row, and exposed plan/funding/external summaries in CLI JSON.
+- Added seven CLI/preflight tests; 63 tests pass, and typecheck, build, and the example check
+  are clean.
 
 ## Next
 
-1. Harden CLI selection/error behavior and selected-scenario comparisons (A11; D5, D9).
-2. Apply README corrections C1–C15 and document ESM/package semantics.
-3. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
+1. Apply README corrections C1–C15 and document ESM/package semantics.
+2. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
    push, open the PR, and monitor checks.
-4. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
+3. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
