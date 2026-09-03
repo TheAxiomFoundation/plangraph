@@ -487,4 +487,23 @@ describe("demand profiles", () => {
     expect(found.map((f) => f.subject)).toEqual(["a"]);
     expect(found[0].message).toMatch(/arrives 6 months later, and nobody is hired to carry its 1.00 FTE/);
   });
+
+  it("costs a pooled role per hire, keeps the index through drops and per-hire delays", () => {
+    const plan = fixture({
+      seats: [role("x", { hireMonths: [0, 0, 2], loadedAnnualByHire: [[12_000], [24_000], null] })],
+      items: [work("a", { duration: 6, demands: [{ seat: "x", fte: 1, basis: "A" }] })],
+    });
+    const s = schedule(plan, AS_PLANNED);
+    const l = ledger(plan, s);
+    expect(l.labor[0]).toBeCloseTo(3_000, 9); // 12k + 24k; the third hire is not yet on payroll
+    expect(l.labor[2]).toBeCloseTo(4_000, 9); // + the role's own 12k rate
+    const dropped = schedule(plan, { ...AS_PLANNED, id: "d", dropHires: { x: [0] } });
+    expect(dropped.hires.x).toEqual([0, 2]);
+    expect(dropped.hireIndex.x).toEqual([1, 2]);
+    expect(ledger(plan, dropped).labor[0]).toBeCloseTo(2_000, 9); // the 24k hire, not the 12k one
+    const delayed = schedule(plan, { ...AS_PLANNED, id: "p", hireDelay: { x: [3, 0, -2] } });
+    expect(delayed.hires.x).toEqual([3, 0, 0]);
+    expect(delayed.hireIndex.x).toEqual([0, 1, 2]);
+    expect(delayed.loads[0].capacity.slice(0, 4)).toEqual([2, 2, 2, 3]);
+  });
 });

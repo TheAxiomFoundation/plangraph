@@ -53,6 +53,12 @@ export interface SeatDef {
    * before the funding year opens use year 1.
    */
   loadedAnnualByYear?: number[];
+  /**
+   * Loaded annual cost per hire, index-aligned with hireMonths, each a per-funding-year
+   * schedule (year 1 first; the last value holds). For a pooled role whose seats are paid
+   * differently. A hire with an entry uses it; one without falls back to the role's rate.
+   */
+  loadedAnnualByHire?: (number[] | null)[];
   costBasis: Basis;
   /** Month index each seat in the role is hired. Seats in place before the plan use 0. */
   hireMonths: number[];
@@ -206,10 +212,15 @@ export interface Scenario {
   id: string;
   name: string;
   gist: string;
-  /** Whole months added to every hire in the role; negative pulls forward. Keys are seat ids. */
-  hireDelay?: Record<SeatId, number>;
+  /**
+   * Whole months added to every hire in the role, or one delay per hire (index-aligned with
+   * hireMonths, missing entries 0); negative pulls forward. Keys are seat ids.
+   */
+  hireDelay?: Record<SeatId, number | number[]>;
   /** Roles that do not exist in this scenario: never hired, never costed; their demand lands on their fallback. */
   dropSeats?: SeatId[];
+  /** Individual hires that do not exist in this scenario: indices into the role's hireMonths. */
+  dropHires?: Record<SeatId, number[]>;
   /** Multiply every stream's volumes. Positive. */
   volumeScale?: number;
   /** Funding lines to count, by id, overriding each line's default. */

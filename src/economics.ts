@@ -47,6 +47,16 @@ export function seatMonthlyCost(plan: Plan, seat: SeatDef, m: number): number {
   return monthlyLoaded(plan, seat.loadedAnnual, m);
 }
 
+/** Loaded monthly cost of one particular hire (index k into the role's hireMonths): its own schedule when it has one, else the role's. */
+export function hireMonthlyCost(plan: Plan, seat: SeatDef, k: number, m: number): number {
+  const own = seat.loadedAnnualByHire?.[k];
+  if (own && own.length > 0) {
+    const y = Math.max(0, fundingYear(plan.calendar, m) - 1);
+    return finiteResult(own[Math.min(y, own.length - 1)] / 12, `monthly loaded cost of "${seat.id}" hire ${k} at month ${m}`);
+  }
+  return seatMonthlyCost(plan, seat, m);
+}
+
 export function ledger(plan: Plan, s: Schedule): Ledger {
   const H = plan.calendar.horizonMonths;
   const zeros = () => new Array(H).fill(0) as number[];
@@ -54,10 +64,13 @@ export function ledger(plan: Plan, s: Schedule): Ledger {
   const labor = zeros();
   const headcount = zeros();
   for (const seat of plan.seats) {
+    const months = s.hires[seat.id] ?? [];
+    const index = s.hireIndex?.[seat.id];
     for (let m = 0; m < H; m++) {
-      const n = seatsHired(s.hires[seat.id], m);
-      addFinite(headcount, m, n, "headcount");
-      addFinite(labor, m, n * seatMonthlyCost(plan, seat, m), "labor cost");
+      addFinite(headcount, m, seatsHired(months, m), "headcount");
+      months.forEach((h, j) => {
+        if (h <= m) addFinite(labor, m, hireMonthlyCost(plan, seat, index?.[j] ?? j, m), "labor cost");
+      });
     }
   }
 

@@ -63,8 +63,10 @@ export interface Schedule {
   horizon: number;
   items: Scheduled[];
   loads: SeatLoad[];
-  /** Effective hire months after the scenario's delays. */
+  /** Effective hire months after the scenario's drops and delays. */
   hires: Record<SeatId, number[]>;
+  /** For each effective hire, its index into the role's hireMonths (so per-hire costs stay aligned). */
+  hireIndex: Record<SeatId, number[]>;
   /** FTE-months routed to external carriers, by month: uncosted and uncapped, but counted. */
   external: number[];
   /** Per-demand, per-month placements, including external work. */
@@ -76,20 +78,35 @@ const finiteResult = (value: number, context: string): number => {
   return value;
 };
 
-export const effectiveHires = (plan: Plan, scenario: Scenario): Record<SeatId, number[]> => {
-  const out = table<number[]>();
+/** Effective hires after the scenario's drops and delays: the month of each, and its index into the role's hireMonths. */
+export const effectiveHiring = (plan: Plan, scenario: Scenario): Record<SeatId, { months: number[]; index: number[] }> => {
+  const out = table<{ months: number[]; index: number[] }>();
   for (const s of plan.seats) {
     if (scenario.dropSeats?.includes(s.id)) {
-      out[s.id] = [];
+      out[s.id] = { months: [], index: [] };
       continue;
     }
-    const delay = has(scenario.hireDelay, s.id) ? scenario.hireDelay![s.id] : 0;
-    out[s.id] = s.hireMonths.map((m) => {
-      const effective = Math.max(0, m + delay);
+    const dropped = new Set(has(scenario.dropHires, s.id) ? scenario.dropHires![s.id] : []);
+    const delay: number | number[] = has(scenario.hireDelay, s.id) ? scenario.hireDelay![s.id] : 0;
+    const months: number[] = [];
+    const index: number[] = [];
+    s.hireMonths.forEach((m, k) => {
+      if (dropped.has(k)) return;
+      const d = Array.isArray(delay) ? (delay[k] ?? 0) : delay;
+      const effective = Math.max(0, m + d);
       if (!Number.isSafeInteger(effective)) throw new Error(`plangraph: non-integer effective hire month for seat "${s.id}"`);
-      return effective;
+      months.push(effective);
+      index.push(k);
     });
+    out[s.id] = { months, index };
   }
+  return out;
+};
+
+export const effectiveHires = (plan: Plan, scenario: Scenario): Record<SeatId, number[]> => {
+  const out = table<number[]>();
+  const hiring = effectiveHiring(plan, scenario);
+  for (const s of plan.seats) out[s.id] = hiring[s.id].months;
   return out;
 };
 
@@ -150,7 +167,13 @@ function order(items: WorkItem[], circles: string[]): WorkItem[] {
 export function schedule(plan: Plan, scenario: Scenario): Schedule {
   const H = plan.calendar.horizonMonths;
   const seatDefs = new Map(plan.seats.map((s) => [s.id, s]));
-  const hires = effectiveHires(plan, scenario);
+  const hiring = effectiveHiring(plan, scenario);
+  const hires = table<number[]>();
+  const hireIndex = table<number[]>();
+  for (const s of plan.seats) {
+    hires[s.id] = hiring[s.id].months;
+    hireIndex[s.id] = hiring[s.id].index;
+  }
   const unlevelled = new Set(plan.seats.filter((x) => x.unlevelled).map((x) => x.id));
   const loads = new Map<SeatId, SeatLoad>(
     plan.seats.map((s) => [
@@ -300,7 +323,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
     horizon: H,
     items: plan.items.map((i) => done.get(i.id)!),
     loads: plan.seats.map((s) => loads.get(s.id)!),
-    hires,
+    hires, hireIndex,
     external,
     bookings,
   };

@@ -127,6 +127,10 @@ export function parsePlan(input: unknown): Plan {
     if (seat.loadedAnnualByYear !== undefined) numberArray(seat.loadedAnnualByYear, `${path}.loadedAnnualByYear`, { nonEmpty: true, min: 0 });
     basis(seat.costBasis, `${path}.costBasis`);
     numberArray(seat.hireMonths, `${path}.hireMonths`, { integer: true, min: 0 });
+    if (seat.loadedAnnualByHire !== undefined) {
+      need(arr(seat.loadedAnnualByHire) && arr(seat.hireMonths) && seat.loadedAnnualByHire.length === seat.hireMonths.length, `${path}.loadedAnnualByHire`, "must have one entry per hire (null for a hire on the role's rate)");
+      if (arr(seat.loadedAnnualByHire)) seat.loadedAnnualByHire.forEach((own: unknown, k: number) => { if (own !== null) numberArray(own, `${path}.loadedAnnualByHire[${k}]`, { nonEmpty: true, min: 0 }); });
+    }
     need(finite(seat.capacityFte), `${path}.capacityFte`, "must be a finite number");
     need(seat.fallback === null || seat.fallback === "external" || nonEmptyString(seat.fallback), `${path}.fallback`, 'must be a seat id, "external", or null');
     if (seat.unlevelled !== undefined) need(typeof seat.unlevelled === "boolean", `${path}.unlevelled`, "must be a boolean");
@@ -237,6 +241,7 @@ export function parsePlan(input: unknown): Plan {
     need(arr(p.scenarios), "plan.scenarios", "must be an array");
     if (arr(p.scenarios)) {
       const seatIds = new Set(seats.filter(isObj).map((seat) => seat.id).filter(nonEmptyString));
+      const hireCounts = new Map<string, number>((seats as unknown[]).filter(isObj).filter((seat) => nonEmptyString(seat.id) && arr(seat.hireMonths)).map((seat) => [seat.id as string, (seat.hireMonths as unknown[]).length]));
       const fundingIds = new Set(funding.filter(isObj).map((line) => line.id).filter(nonEmptyString));
       Array.from(p.scenarios).forEach((scenario, i) => {
         const path = `plan.scenarios[${i}]`;
@@ -253,7 +258,19 @@ export function parsePlan(input: unknown): Plan {
           if (isObj(scenario.hireDelay)) {
             for (const key of Object.getOwnPropertyNames(scenario.hireDelay)) {
               need(seatIds.has(key), `${path}.hireDelay.${key}`, "must name a known seat");
-              need(integer(scenario.hireDelay[key]), `${path}.hireDelay.${key}`, "must be an integer");
+              const d: unknown = scenario.hireDelay[key];
+              need(integer(d) || (arr(d) && d.every((x: unknown) => integer(x))), `${path}.hireDelay.${key}`, "must be an integer, or one integer per hire");
+            }
+          }
+        }
+        if (scenario.dropHires !== undefined) {
+          need(isObj(scenario.dropHires), `${path}.dropHires`, "must be an object");
+          if (isObj(scenario.dropHires)) {
+            for (const key of Object.getOwnPropertyNames(scenario.dropHires)) {
+              need(seatIds.has(key), `${path}.dropHires.${key}`, "must name a known seat");
+              const hireCount = hireCounts.get(key);
+              const ks: unknown = scenario.dropHires[key];
+              need(arr(ks) && ks.every((k: unknown) => integer(k) && (k as number) >= 0 && (hireCount === undefined || (k as number) < hireCount)), `${path}.dropHires.${key}`, "must list indices into the seat's hireMonths");
             }
           }
         }
