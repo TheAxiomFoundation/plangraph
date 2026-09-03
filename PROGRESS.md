@@ -5,7 +5,7 @@
 - Branch: `review-fixes`
 - Starting point: `06cf875`
 - Audit: `plangraph-review-2026-09-03.out.md`, read in full
-- Current phase: applying README corrections C1–C15
+- Current phase: closing strict audit-review gaps before documentation and packaging
 
 ## Done
 
@@ -50,6 +50,8 @@
   human row, and exposed plan/funding/external summaries in CLI JSON.
 - Added seven CLI/preflight tests; 63 tests pass, and typecheck, build, and the example check
   are clean.
+- Enforced the whole-run horizon invariant for underway finite work as well as movable work;
+  an over-horizon item now goes beyond with no carriers, load, or bookings.
 
 ## Next
 

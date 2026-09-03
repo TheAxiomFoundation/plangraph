@@ -78,6 +78,26 @@ describe("defensive schedule audit", () => {
     expect(result.bookings.filter((booking) => booking.item === "b")).toEqual([]);
   });
 
+  it("A1 applies the whole-run horizon invariant to underway finite work", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 4, fundingYearStartMonth: 0 },
+      items: [work("underway", { earliest: 2, duration: 3, underway: true })],
+    });
+
+    const result = schedule(plan, AS_PLANNED);
+
+    expect(result.items[0]).toMatchObject({
+      start: 4,
+      end: 4,
+      duration: 0,
+      beyond: true,
+      binding: { kind: "horizon" },
+      carriers: [],
+    });
+    expect(result.loads[0].demand).toEqual([0, 0, 0, 0]);
+    expect(result.bookings).toEqual([]);
+  });
+
   it("D2 aggregates engineer and founder demands by their monthly carrier", () => {
     const plan = fixture({
       seats: [

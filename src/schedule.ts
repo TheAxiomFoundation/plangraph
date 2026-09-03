@@ -276,9 +276,9 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
         beyond = true;
         binding = { kind: "horizon" };
       }
-    } else if (i.underway && !i.standing && start + duration > H) {
-      // Work already begun keeps its declared window; what falls past the horizon is simply not counted.
-      duration = Math.max(1, H - start);
+    } else if (!beyond && i.underway && !i.standing && start + duration > H) {
+      beyond = true;
+      binding = { kind: "horizon" };
     }
     if (beyond) {
       done.set(i.id, { item: i, start: H, end: H, duration: 0, beyond: true, binding, carriers: [] });
