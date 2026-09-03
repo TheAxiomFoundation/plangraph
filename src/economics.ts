@@ -2,8 +2,8 @@
 // year, burn while items run, revenue after the unlocking item completes, funding on its own
 // clock, and the cash line that results. Monthly, in dollars, deterministic.
 
-import { fundingYear, type Plan } from "./model";
-import { seatsHired, type Schedule } from "./schedule";
+import { fundingYear, type Plan } from "./model.js";
+import { seatsHired, type Schedule } from "./schedule.js";
 
 export interface Ledger {
   labor: number[];

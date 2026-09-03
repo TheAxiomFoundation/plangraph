@@ -3,9 +3,9 @@
 // not make sense somewhere. Info is a fact worth knowing. Each finding names its subject and
 // says what to do, so an agent editing nodes gets the same feedback a reviewer would give.
 
-import { byFundingYear, fundingYears, sumRange, type Ledger } from "./economics";
-import { monthLabel, type Plan, type SeatId } from "./model";
-import { overloads, type Schedule } from "./schedule";
+import { byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
+import { monthLabel, type Plan, type SeatId } from "./model.js";
+import { overloads, type Schedule } from "./schedule.js";
 
 export type Severity = "error" | "warn" | "info";
 

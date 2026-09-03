@@ -1,12 +1,12 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 // plangraph check <plan.json> [--scenario id] [--json]
 //
 // Schedules every scenario the plan carries (or the two defaults), prints the aggregates and
 // the findings, and exits non-zero on errors. Run under `bun --watch` for feedback on save.
 
-import { monthLabel } from "./model";
-import { loadPlanFile } from "./parse";
-import { report } from "./report";
+import { monthLabel } from "./model.js";
+import { loadPlanFile } from "./parse.js";
+import { report } from "./report.js";
 
 const args = process.argv.slice(2);
 const cmd = args[0];

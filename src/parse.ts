@@ -4,7 +4,7 @@
 
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
-import type { Basis, Plan } from "./model";
+import type { Basis, Plan } from "./model.js";
 
 type Problem = string;
 

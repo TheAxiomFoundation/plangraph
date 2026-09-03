@@ -8,15 +8,19 @@
     "url": "https://github.com/TheAxiomFoundation/plangraph"
   },
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "bin": {
-    "plangraph": "./src/cli.ts"
+    "plangraph": "./dist/cli.js"
   },
   "files": [
+    "dist",
     "src",
     "examples",
     "README.md",
@@ -26,7 +30,9 @@
     "test": "bunx vitest run",
     "typecheck": "tsc --noEmit",
     "check": "bun src/cli.ts check examples/studio.yaml",
-    "watch": "bun --watch src/cli.ts check examples/studio.yaml"
+    "watch": "bun --watch src/cli.ts check examples/studio.yaml",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build && bun run test && bun run check"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -34,9 +40,19 @@
     "vitest": "^3.2.4"
   },
   "engines": {
-    "bun": ">=1.1"
+    "node": ">=20"
   },
   "dependencies": {
     "yaml": "^2.6.1"
-  }
+  },
+  "keywords": [
+    "planning",
+    "project-management",
+    "scheduling",
+    "resource-leveling",
+    "roadmap",
+    "dependency-graph",
+    "scenario",
+    "harness"
+  ]
 }

@@ -12,7 +12,7 @@
 //
 // Every start records the constraint that bound it. Deterministic: same inputs, same output.
 
-import type { Demand, Plan, Scenario, SeatDef, SeatId, WorkItem } from "./model";
+import type { Demand, Plan, Scenario, SeatDef, SeatId, WorkItem } from "./model.js";
 
 export type Binding =
   | { kind: "declared" }

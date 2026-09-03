@@ -1,10 +1,10 @@
 // One report per scenario: the aggregates a planner reads first, then the findings. The CLI
 // prints it; a program can take it as data.
 
-import { atFundingYearEnd, byFundingYear, fundingYears, ledger, type Ledger } from "./economics";
-import { countBy, lintAll, type Finding, type Severity } from "./lint";
-import { monthLabel, scenariosOf, type Plan, type Scenario } from "./model";
-import { overloads, schedule, slips, type Schedule, type Slip } from "./schedule";
+import { atFundingYearEnd, byFundingYear, fundingYears, ledger, type Ledger } from "./economics.js";
+import { countBy, lintAll, type Finding, type Severity } from "./lint.js";
+import { monthLabel, scenariosOf, type Plan, type Scenario } from "./model.js";
+import { overloads, schedule, slips, type Schedule, type Slip } from "./schedule.js";
 
 export interface ScenarioReport {
   scenario: Scenario;
