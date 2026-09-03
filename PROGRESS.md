@@ -5,7 +5,9 @@
 - Branch: `review-fixes`
 - Starting point: `06cf875`
 - Audit: `plangraph-review-2026-09-03.out.md`, read in full
-- Current phase: packaging integration and CI wiring
+- Current phase: implementation complete; GitHub delivery awaiting write access
+- Delivery blocker: the shell cannot resolve `github.com`, `gh` reports an invalid saved
+  token, and the connected GitHub app canceled both attempted write operations.
 
 ## Done
 
@@ -66,8 +68,11 @@
 - The complete seven-file suite passes 65 tests and 901 assertions, including the offline
   package test under Node 25; CI performs the clean registry-backed install under Node 20.
 - Typecheck, build, and the example check are clean.
+- Completed independent validation, documentation, packaging, and final-diff reviews with
+  no remaining A1–A11, C1–C15, or D1–D10 blocker.
 
 ## Next
 
-1. Run the full verification suite, push, open the PR, and monitor checks.
-2. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
+1. Restore GitHub write access, push `review-fixes`, and open the requested PR.
+2. Monitor and repair CI until green.
+3. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
