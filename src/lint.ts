@@ -177,26 +177,27 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W103 owner arrives long after the item starts, and a person carries it.
+  // W103 owner arrives long after the item starts: a person carries it meanwhile, or nobody does
+  // and the load sits on the empty seat (a seat with no fallback carries its own work before it exists).
   for (const it of s.items) {
     if (it.beyond) continue;
     for (const c of it.carriers) {
-      if (c.carrier !== c.seat && c.carrier !== "external") {
-        const hires = s.hires[c.seat] ?? [];
-        if (hires.length === 0) {
-          const who = staffedAt(c.carrier, it.start) ? `${seatTitle(plan, c.carrier)} carries its ${c.fte.toFixed(2)} FTE` : `nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}`;
-          out.push({ code: "W103", severity: "warn", subject: it.item.id, message: `"${it.item.label}" asks for ${seatTitle(plan, c.seat)}, which this scenario never hires; ${who}.`, hint: "Fund the seat, or accept that the carrier owns this for good." });
-          continue;
-        }
-        let firstHire = hires[0] ?? H;
-        for (let k = 1; k < hires.length; k++) firstHire = Math.min(firstHire, hires[k]);
-        const wait = firstHire - it.start;
-        if (wait >= policy.lateOwnerMonths) {
-          const message = staffedAt(c.carrier, it.start)
-            ? `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${c.fte.toFixed(2)} FTE meanwhile.`
-            : `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later, and nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}.`;
-          out.push({ code: "W103", severity: "warn", subject: it.item.id, message, hint: "Pull the hire forward, fund a contractor, or move the start." });
-        }
+      if (c.carrier === "external") continue;
+      if (c.carrier === c.seat && staffedAt(c.seat, it.start)) continue;
+      const hires = s.hires[c.seat] ?? [];
+      if (hires.length === 0) {
+        const who = staffedAt(c.carrier, it.start) ? `${seatTitle(plan, c.carrier)} carries its ${c.fte.toFixed(2)} FTE` : `nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}`;
+        out.push({ code: "W103", severity: "warn", subject: it.item.id, message: `"${it.item.label}" asks for ${seatTitle(plan, c.seat)}, which this scenario never hires; ${who}.`, hint: "Fund the seat, or accept that the carrier owns this for good." });
+        continue;
+      }
+      let firstHire = hires[0] ?? H;
+      for (let k = 1; k < hires.length; k++) firstHire = Math.min(firstHire, hires[k]);
+      const wait = firstHire - it.start;
+      if (wait >= policy.lateOwnerMonths) {
+        const message = staffedAt(c.carrier, it.start)
+          ? `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${c.fte.toFixed(2)} FTE meanwhile.`
+          : `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later, and nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}.`;
+        out.push({ code: "W103", severity: "warn", subject: it.item.id, message, hint: "Pull the hire forward, fund a contractor, or move the start." });
       }
     }
   }
