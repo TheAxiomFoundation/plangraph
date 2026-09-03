@@ -48,6 +48,7 @@ describe("defensive funding-clock audit", () => {
 
   it("A7 reconciles pre-funding, complete years, and trailing months in helpers and reports", () => {
     const plan = fixture({
+      openingCash: 5_000,
       seats: [
         {
           id: "x",
@@ -129,6 +130,13 @@ describe("defensive funding-clock audit", () => {
       revenue: afterFundingYears(rows.revenue, plan.calendar),
       funding: afterFundingYears(rows.funding, plan.calendar),
     });
+
+    const reconciledCost = result.preFunding.cost + sum(result.costByYear) + result.trailing.cost;
+    const reconciledRevenue = result.preFunding.revenue + sum(result.revenueByYear) + result.trailing.revenue;
+    const reconciledFunding = result.preFunding.funding + sum(result.fundingByYear) + result.trailing.funding;
+    expect(monthly.cash[monthly.cash.length - 1]).toBe(
+      plan.openingCash! + reconciledFunding + reconciledRevenue - reconciledCost,
+    );
   });
 
   it("A7 seeds the cash ledger with openingCash", () => {

@@ -52,6 +52,8 @@
   are clean.
 - Enforced the whole-run horizon invariant for underway finite work as well as movable work;
   an over-horizon item now goes beyond with no carriers, load, or bookings.
+- Added an explicit ending-cash assertion from opening cash plus the reconciled pre-funding,
+  complete-year, and trailing funding, revenue, and cost periods.
 
 ## Next
 
