@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -227,4 +227,29 @@ describe("defensive CLI audit", () => {
     expect((thrown as Error).message).toBe('plangraph: unknown scenario "does-not-exist"');
     expect(physicalLines((thrown as Error).message)).toHaveLength(1);
   });
+});
+
+describe("plangraph watch", () => {
+  it("checks once, then again after every save of the plan file, and stays up", async () => {
+    const path = writePlan({ ...basePlan(), name: "before" });
+    const child = spawn("bun", [cli, "watch", path], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (chunk) => { out += String(chunk); });
+    const until = (ready: () => boolean, ms: number) =>
+      new Promise<void>((done, fail) => {
+        const started = Date.now();
+        const tick = () => (ready() ? done() : Date.now() - started > ms ? fail(new Error(`timed out; output so far:\n${out}`)) : setTimeout(tick, 50));
+        tick();
+      });
+    try {
+      await until(() => out.includes("watching "), 10_000);
+      expect(out).toMatch(/plangraph · before/);
+      writeFileSync(path, JSON.stringify({ ...basePlan(), name: "after" }));
+      await until(() => out.includes("plangraph · after"), 10_000);
+      expect(out).toMatch(/plan\.json changed/);
+      expect(child.exitCode).toBeNull();
+    } finally {
+      child.kill("SIGTERM");
+    }
+  }, 30_000);
 });
