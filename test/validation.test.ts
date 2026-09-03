@@ -91,9 +91,17 @@ describe("complete plan parsing", () => {
       ["plan.scenarios[0].durationScale", (raw) => (raw.scenarios[0].durationScale = Number.POSITIVE_INFINITY)],
       ["plan.scenarios[0].effortScale", (raw) => (raw.scenarios[0].effortScale = 0)],
       ["plan.scenarios[0].hireDelay.eng", (raw) => (raw.scenarios[0].hireDelay = { eng: 0.5 })],
+      ["plan.scenarios[0].hireDelay.eng", (raw) => {
+        raw.scenarios[0].hireDelay = {};
+        Object.defineProperty(raw.scenarios[0].hireDelay, "eng", { value: 0.5, enumerable: false });
+      }],
       ["plan.scenarios[0].hireDelay.unknown", (raw) => (raw.scenarios[0].hireDelay = { unknown: 1 })],
       ["plan.scenarios[0].countFunding.unknown", (raw) => (raw.scenarios[0].countFunding = { unknown: true })],
       ["plan.scenarios[0].countFunding.grant", (raw) => (raw.scenarios[0].countFunding = { grant: "yes" })],
+      ["plan.scenarios[0].countFunding.grant", (raw) => {
+        raw.scenarios[0].countFunding = {};
+        Object.defineProperty(raw.scenarios[0].countFunding, "grant", { value: "yes", enumerable: false });
+      }],
     ];
     for (const [path, mutate] of cases) expectRejectedAt(mutate, path);
 

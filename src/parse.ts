@@ -246,7 +246,7 @@ export function parsePlan(input: unknown): Plan {
         if (scenario.hireDelay !== undefined) {
           need(isObj(scenario.hireDelay), `${path}.hireDelay`, "must be an object");
           if (isObj(scenario.hireDelay)) {
-            for (const key of Object.keys(scenario.hireDelay)) {
+            for (const key of Object.getOwnPropertyNames(scenario.hireDelay)) {
               need(seatIds.has(key), `${path}.hireDelay.${key}`, "must name a known seat");
               need(integer(scenario.hireDelay[key]), `${path}.hireDelay.${key}`, "must be an integer");
             }
@@ -255,7 +255,7 @@ export function parsePlan(input: unknown): Plan {
         if (scenario.countFunding !== undefined) {
           need(isObj(scenario.countFunding), `${path}.countFunding`, "must be an object");
           if (isObj(scenario.countFunding)) {
-            for (const key of Object.keys(scenario.countFunding)) {
+            for (const key of Object.getOwnPropertyNames(scenario.countFunding)) {
               need(fundingIds.has(key), `${path}.countFunding.${key}`, "must name a known funding line");
               need(typeof scenario.countFunding[key] === "boolean", `${path}.countFunding.${key}`, "must be a boolean");
             }

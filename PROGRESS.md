@@ -21,6 +21,8 @@
   and report, including `__proto__` and `toString` regressions.
 - Added thirteen validation/preflight/prototype tests, including sparse-array, reserved-id,
   and derived-overflow guards; 30 committed tests pass and typecheck is clean.
+- Closed the programmatic-input edge where non-enumerable own override properties could be
+  consumed without validation; inherited override properties remain ignored.
 - Completed whole-run horizon enforcement, including standing work that reaches the horizon,
   with zero load, carriers, or bookings for beyond items.
 - Preserved each demand's source/carrier placement month by month while aggregating only for
