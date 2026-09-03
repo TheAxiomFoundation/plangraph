@@ -393,3 +393,62 @@ describe("defensive revenue audit", () => {
     expect(standing.revenueByStream["standing-revenue"]).toEqual([0, 0, 100, 100, 100, 100]);
   });
 });
+
+describe("dropSeats and unlevelled", () => {
+  it("drops a role from a scenario: no hires, no cost, demand on the fallback, and W103 says so", async () => {
+    const { AS_PLANNED, ledger, lintAll, parsePlan, schedule } = await import("../src/index");
+    const plan = parsePlan({
+      name: "drop",
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      circles: ["a"],
+      escalation: { rate: 0, basis: "A" },
+      seats: [
+        { id: "lead", title: "Lead", loadedAnnual: 120_000, costBasis: "A", hireMonths: [0], capacityFte: 1, fallback: null },
+        { id: "extra", title: "Extra", loadedAnnual: 90_000, costBasis: "A", hireMonths: [2], capacityFte: 1, fallback: "lead" },
+      ],
+      items: [{ id: "w", lane: "l", label: "Work", circle: "a", earliest: 0, duration: 12, standing: false, underway: false, predecessors: [], demands: [{ seat: "lead", fte: 0.5, basis: "A" }, { seat: "extra", fte: 0.5, basis: "A" }] }],
+      streams: [], funding: [], nonLabor: [],
+      scenarios: [AS_PLANNED, { id: "slice", name: "Slice", gist: "without the extra seat", level: false, dropSeats: ["extra"] }],
+    });
+    const full = schedule(plan, plan.scenarios![0]);
+    const slice = schedule(plan, plan.scenarios![1]);
+    expect(slice.hires.extra).toEqual([]);
+    expect(slice.loads.find((l) => l.seat === "extra")!.capacity.every((c) => c === 0)).toBe(true);
+    expect(slice.loads.find((l) => l.seat === "lead")!.demand[5]).toBeCloseTo(1, 9);
+    expect(full.loads.find((l) => l.seat === "lead")!.demand[5]).toBeCloseTo(0.5, 9);
+    expect(ledger(plan, slice).labor[5]).toBeCloseTo(10_000, 6);
+    const w103 = lintAll(plan, slice, ledger(plan, slice)).filter((f) => f.code === "W103");
+    expect(w103).toHaveLength(1);
+    expect(w103[0].message).toMatch(/never hires; Lead carries/);
+    expect(() => parsePlan({ ...plan, scenarios: [{ id: "bad", name: "b", gist: "", level: false, dropSeats: ["nope"] }] })).toThrow(/dropSeats\[0\]/);
+  });
+
+  it("never waits for room on an unlevelled seat; the overload is reported instead", async () => {
+    const { LEVELED, lintAll, ledger, parsePlan, schedule } = await import("../src/index");
+    const plan = parsePlan({
+      name: "leadership",
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      circles: ["a"],
+      escalation: { rate: 0, basis: "A" },
+      seats: [
+        { id: "ceo", title: "CEO", loadedAnnual: 200_000, costBasis: "A", hireMonths: [0], capacityFte: 1, fallback: null, unlevelled: true },
+        { id: "eng", title: "Engineer", loadedAnnual: 100_000, costBasis: "A", hireMonths: [0], capacityFte: 1, fallback: "ceo" },
+      ],
+      items: [
+        { id: "a", lane: "l", label: "A", circle: "a", earliest: 0, duration: 6, standing: false, underway: false, predecessors: [], demands: [{ seat: "ceo", fte: 1, basis: "A" }] },
+        { id: "b", lane: "l", label: "B", circle: "a", earliest: 0, duration: 6, standing: false, underway: false, predecessors: [], demands: [{ seat: "ceo", fte: 1, basis: "A" }] },
+        { id: "c", lane: "l", label: "C", circle: "a", earliest: 0, duration: 6, standing: false, underway: false, predecessors: [], demands: [{ seat: "eng", fte: 1, basis: "A" }] },
+        { id: "d", lane: "l", label: "D", circle: "a", earliest: 0, duration: 6, standing: false, underway: false, predecessors: [], demands: [{ seat: "eng", fte: 1, basis: "A" }] },
+      ],
+      streams: [], funding: [], nonLabor: [], scenarios: [LEVELED],
+    });
+    const s = schedule(plan, LEVELED);
+    const start = (id: string) => s.items.find((i) => i.item.id === id)!.start;
+    expect(start("a")).toBe(0);
+    expect(start("b")).toBe(0); // the CEO absorbs; b is not pushed
+    expect(start("d")).toBe(6); // the engineer is levelled
+    const w101 = lintAll(plan, s, ledger(plan, s)).filter((f) => f.code === "W101" && f.subject === "ceo");
+    expect(w101).toHaveLength(1);
+    expect(() => parsePlan({ ...plan, seats: [{ ...plan.seats[0], unlevelled: "yes" }, plan.seats[1]] })).toThrow(/unlevelled/);
+  });
+});

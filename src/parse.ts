@@ -129,6 +129,7 @@ export function parsePlan(input: unknown): Plan {
     numberArray(seat.hireMonths, `${path}.hireMonths`, { integer: true, min: 0 });
     need(finite(seat.capacityFte), `${path}.capacityFte`, "must be a finite number");
     need(seat.fallback === null || seat.fallback === "external" || nonEmptyString(seat.fallback), `${path}.fallback`, 'must be a seat id, "external", or null');
+    if (seat.unlevelled !== undefined) need(typeof seat.unlevelled === "boolean", `${path}.unlevelled`, "must be a boolean");
   });
 
   const items = list("items");
@@ -254,6 +255,10 @@ export function parsePlan(input: unknown): Plan {
               need(integer(scenario.hireDelay[key]), `${path}.hireDelay.${key}`, "must be an integer");
             }
           }
+        }
+        if (scenario.dropSeats !== undefined) {
+          need(arr(scenario.dropSeats), `${path}.dropSeats`, "must be an array of seat ids");
+          if (arr(scenario.dropSeats)) scenario.dropSeats.forEach((id, k) => need(typeof id === "string" && seatIds.has(id), `${path}.dropSeats[${k}]`, "must name a known seat"));
         }
         if (scenario.countFunding !== undefined) {
           need(isObj(scenario.countFunding), `${path}.countFunding`, "must be an object");

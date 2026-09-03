@@ -183,6 +183,11 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     for (const c of it.carriers) {
       if (c.carrier !== c.seat && c.carrier !== "external") {
         const hires = s.hires[c.seat] ?? [];
+        if (hires.length === 0) {
+          const who = staffedAt(c.carrier, it.start) ? `${seatTitle(plan, c.carrier)} carries its ${c.fte.toFixed(2)} FTE` : `nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}`;
+          out.push({ code: "W103", severity: "warn", subject: it.item.id, message: `"${it.item.label}" asks for ${seatTitle(plan, c.seat)}, which this scenario never hires; ${who}.`, hint: "Fund the seat, or accept that the carrier owns this for good." });
+          continue;
+        }
         let firstHire = hires[0] ?? H;
         for (let k = 1; k < hires.length; k++) firstHire = Math.min(firstHire, hires[k]);
         const wait = firstHire - it.start;

@@ -79,6 +79,10 @@ const finiteResult = (value: number, context: string): number => {
 export const effectiveHires = (plan: Plan, scenario: Scenario): Record<SeatId, number[]> => {
   const out = table<number[]>();
   for (const s of plan.seats) {
+    if (scenario.dropSeats?.includes(s.id)) {
+      out[s.id] = [];
+      continue;
+    }
     const delay = has(scenario.hireDelay, s.id) ? scenario.hireDelay![s.id] : 0;
     out[s.id] = s.hireMonths.map((m) => {
       const effective = Math.max(0, m + delay);
@@ -147,6 +151,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
   const H = plan.calendar.horizonMonths;
   const seatDefs = new Map(plan.seats.map((s) => [s.id, s]));
   const hires = effectiveHires(plan, scenario);
+  const unlevelled = new Set(plan.seats.filter((x) => x.unlevelled).map((x) => x.id));
   const loads = new Map<SeatId, SeatLoad>(
     plan.seats.map((s) => [
       s.id,
@@ -196,6 +201,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       }
       let worst: { short: number; seat: SeatId; carrier: SeatId } | null = null;
       for (const [carrier, demand] of landed) {
+        if (unlevelled.has(carrier)) continue; // leadership absorbs; the overload is reported, not scheduled around
         const load = loads.get(carrier);
         const short = load ? load.demand[m] + demand.fte - load.capacity[m] : demand.fte;
         const earlier =
