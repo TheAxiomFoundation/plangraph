@@ -3,6 +3,7 @@ import {
   AS_PLANNED,
   LEVELED,
   ledger,
+  lintAll,
   lintPlan,
   overloads,
   schedule,
@@ -473,5 +474,17 @@ describe("demand profiles", () => {
     expect(demandAt(plan.items[0].demands[0], 0)).toBe(0.8);
     expect(demandAt(plan.items[0].demands[0], 40)).toBe(0.2);
     expect(() => parsePlan({ ...plan, items: [{ ...plan.items[0], demands: [{ ...plan.items[0].demands[0], profile: [] }] }] })).toThrow(/profile/);
+  });
+
+  it("W103 reports a seat carrying its own work before it exists", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      seats: [role("x", { hireMonths: [6] })],
+      items: [work("a", { duration: 12 })],
+    });
+    const s = schedule(plan, AS_PLANNED);
+    const found = lintAll(plan, s, ledger(plan, s)).filter((f) => f.code === "W103");
+    expect(found.map((f) => f.subject)).toEqual(["a"]);
+    expect(found[0].message).toMatch(/arrives 6 months later, and nobody is hired to carry its 1.00 FTE/);
   });
 });
