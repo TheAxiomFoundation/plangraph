@@ -4,8 +4,8 @@
 // demand seats; seats exist from a hire month and cost money whether or not they are busy;
 // items depend on other items; finishing an item can unlock a revenue stream; funding
 // arrives on its own clock. A scenario is a set of overrides on that graph. The scheduler is
-// a pure function from (plan, scenario) to a schedule, and every start it produces names the
-// constraints that bound it, so "why is this late" is an output rather than an argument.
+// a pure function from (plan, scenario) to a schedule, and every start it produces names one
+// deterministic binding; coincident causes are not retained.
 //
 // Cost, demand, revenue and funding assumptions carry a basis: D derived from a source
 // model, A assumed, M measured. An assumed number in a derived-looking place is a bug.
@@ -230,7 +230,7 @@ export const AS_PLANNED: Scenario = {
 export const LEVELED: Scenario = {
   id: "leveled",
   name: "Capacity-leveled",
-  gist: "A seat cannot carry more than it has; overloaded work slides later in priority order.",
+  gist: "Movable work slides later in priority order until its internal carriers fit; fixed load can still overload.",
   level: true,
 };
 

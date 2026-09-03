@@ -5,7 +5,7 @@
 - Branch: `review-fixes`
 - Starting point: `06cf875`
 - Audit: `plangraph-review-2026-09-03.out.md`, read in full
-- Current phase: closing strict audit-review gaps before documentation and packaging
+- Current phase: packaging integration and CI wiring
 
 ## Done
 
@@ -54,10 +54,16 @@
   an over-horizon item now goes beyond with no carriers, load, or bookings.
 - Added an explicit ending-cash assertion from opening cash plus the reconciled pre-funding,
   complete-year, and trailing funding, revenue, and cost periods.
+- Applied README corrections C1–C15, including exact parser/preflight, scheduling, funding,
+  lint, ESM, root-export, and TaskJuggler claims.
+- Documented the serial scheduling heuristic, deterministic single-binding attribution,
+  B5 inference conventions, configurable lint policy, and intentionally absent W113/W114.
+- Added explicit valid owners to the example without changing its scheduling semantics and
+  corrected both leveled scenario gists to acknowledge fixed-load overloads.
+- The documentation state passes 64 tests plus typecheck, build, and the example check.
 
 ## Next
 
-1. Apply README corrections C1–C15 and document ESM/package semantics.
-2. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
+1. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
    push, open the PR, and monitor checks.
-3. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
+2. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
