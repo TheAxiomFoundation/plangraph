@@ -5,87 +5,143 @@ monthly calendar: items demand seats, seats exist from a hire month and cost mon
 or not they are busy, items depend on other items, finishing an item can unlock a revenue
 stream, funding arrives on its own clock. A scenario is a set of overrides on that graph.
 The scheduler is a pure, deterministic function from plan and scenario to schedule, and
-every start it produces names the constraint that bound it, so "why is this late" is an
-output rather than an argument.
+every start it produces carries the constraint that bound it, so "why is this late" is an
+output rather than an argument. When two constraints bind in the same month the label names
+one of them, chosen the same way every time.
 
-It comes with a harness. Every save re-schedules every scenario and prints the aggregates a
-planner reads first and the findings a reviewer would raise: seats over capacity, seats hired
-before their work, owners arriving after their work starts, slips and their cause, cash going
-negative, revenue that rests on assumptions, streams that never unlock, portfolios too wide,
-principals carrying unfilled seats. Errors mean the graph is not a plan yet.
+It comes with a harness. With `plangraph watch <plan>`, every save of the plan file
+re-schedules every scenario and
+prints the aggregates a planner reads first and the findings a reviewer would raise: seats
+over capacity, hires sitting idle, work carried before its seat arrives, slips and their
+cause, cash going negative, revenue that rests on assumptions, streams that never unlock,
+portfolios too wide, principals carrying unfilled seats. The parser rejects malformed data
+with the exact path. A structural error means the graph is not a plan yet, and nothing is
+scheduled until it is fixed.
 
-Plans are plain YAML or JSON, so a person or an agent can write one without a build step. YAML is for people, with comments carrying provenance; JSON is the interchange.
+Plans are plain YAML or JSON, so a person or an agent writes one without a build step. YAML
+is for people, with comments carrying provenance; JSON is the interchange. The npm package
+itself is built to `dist`.
 
 ## Quick start
 
-```
+```sh
 bun install
 bun run check          # schedules examples/studio.yaml and prints the report
-bun run watch          # the same, on every save
+bun run watch          # the same, again on every save of the plan file
 bun src/cli.ts check my-plan.json --json --scenario leveled
 ```
 
-Or as a library:
+Or from an ESM program:
 
 ```ts
-import { loadPlanFile, report } from "plangraph";
-const r = report(loadPlanFile("my-plan.json"));
-for (const s of r.scenarios) console.log(s.scenario.name, s.costByYear, s.findings);
+import { report } from "plangraph";
+import { loadPlanFile } from "plangraph/node";
+const result = report(loadPlanFile("my-plan.json"));
+for (const s of result.scenarios) console.log(s.scenario.name, s.costByYear, s.findings);
 ```
+
+The package is ESM-only and needs Node 20 or newer. The root export never touches the
+filesystem, so a browser bundle can import the engine and `parsePlan`/`parsePlanText`
+directly; `plangraph/node` adds `loadPlanFile`, which reads from `node:fs`.
 
 ## The model
 
 | Node | What it carries |
 |---|---|
-| Seat | `loadedAnnual` cost, `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the work until the hire lands, `"external"` for a contractor with no capacity limit, or `null` for nobody. |
-| Work item | `earliest` month, `duration` or `standing` (runs to the horizon), `predecessors` with optional lag, `demands` in FTE per month per seat, `underway` when the start is a fact, optional `burnPerMonth`. Its `circle` is its priority group. |
-| Revenue stream | `unlockedBy` an item, `price`, `volumeByYear` after unlock, `rampMonths`. |
-| Funding line | dollars `byMonth`, `counted` by default or not. |
-| Non-labor line | dollars `byYear` of the funding calendar. |
-| Scenario | `hireDelay` by seat, `volumeScale`, `countFunding`, `durationScale`, `effortScale`, and `level`: whether capacity binds. |
+| Seat | `loadedAnnual` cost, optionally `loadedAnnualByYear` (one value per funding year, the last holding), which replaces the flat escalation for sources that escalate salary and then load it; `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. `unlevelled: true` marks a leadership seat: leveling never waits for room on it, and its overload is reported instead. |
+| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat (or a `profile`: FTE by quarter of the run, the last value holding), an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, and a `circle`, its priority group. |
+| Revenue stream | `unlockedBy` an item, `price`, recurring annual `volumeByYear` after unlock, `rampMonths`. |
+| Funding line | dollars `byMonth`, `counted` by default or overridden by a scenario. |
+| Non-labor line | dollars `byYear` on the funding calendar. |
+| Scenario | `hireDelay` by seat, `dropSeats` (roles that do not exist in the scenario: never hired or costed, their demand on their fallback), `volumeScale`, `countFunding`, `durationScale`, `effortScale`, and `level`: whether movable work respects capacity. |
+| Plan | the calendar, circles in priority order, optional `openingCash`, optional reference totals, optional `lint` thresholds. |
 
-Every number carries a basis: `D` derived from a source model, `A` assumed, `M` measured.
+Fallback is all-or-nothing per role: while a role has no hire, all of its demand goes to the
+fallback; once the first seat is hired, all of it stays on the role. External work is
+uncapped and uncosted, and it is counted: month by month in `Schedule.external`, and as
+`externalFteMonths` in every scenario report. Two findings lean on conventions rather than
+fields: W116 treats a seat with `fallback: null` as a principal, and W115 treats the last
+circle as the one that is separately funded.
+
+Cost, demand, revenue and funding assumptions carry a basis: `D` derived from a source
+model, `A` assumed, `M` measured. Calendar values, durations, lags, capacity, ramps, hire
+dates and scenario scales do not. Months are integers; there is no partial-month proration.
+
+## Scheduling
 
 The scheduler takes items in priority order (circle, then declared start, then id),
-predecessors first. Each starts at the latest of its declared month, its predecessors' ends
-(a standing predecessor counts from its start), and, when leveling, the first month every
-demanded seat has room for the whole run. An unfilled seat's demand lands on its fallback,
-so a late hire shows up as load on the person carrying it. An item that never fits goes
-beyond the horizon rather than being crammed into the last month, and takes its dependents
-with it.
+predecessors first, which can pull a lower-priority predecessor ahead of unrelated work. Ids
+break ties for scarce capacity. It is a serial heuristic, not an optimizer.
+
+Each planned item starts at the latest of its declared month, its predecessors' ends (a
+standing predecessor releases its successors one month after it starts), and, when leveling,
+the first month from which every carrier it needs has room for the whole run. Work marked
+`underway` keeps its declared start: it waits for nothing, is not leveled, and a beyond
+predecessor does not take it beyond. Demands are
+resolved to carriers month by month and added up per carrier before they are compared with
+capacity, so two demands that land on the same person count together. A finite item that
+cannot finish inside the horizon, underway or not, goes beyond it: it books nothing,
+unlocks nothing, and takes its dependents with it. Standing work runs from its scheduled
+start to the horizon.
+
+## Funding clock and reports
+
+A funding year is twelve complete months from `calendar.fundingYearStartMonth`. Reports
+carry `preFunding`, one entry per complete year in `costByYear`, `revenueByYear` and
+`fundingByYear`, and `trailing`, and the three reconcile exactly to the monthly ledger. A
+year-end outside the horizon is `null`, never copied from the last month. `openingCash`
+(default 0) seeds the cash line.
+
+`report()` returns the full schedule, the monthly ledger, plan findings once, scenario
+findings with their scenario, and the summaries. The CLI's `--json` is a smaller
+projection of the same.
 
 ## Findings
 
 | Code | Meaning |
 |---|---|
-| E001–E006 | Broken graph: duplicate ids, unknown or self predecessors, unowned items, missing durations, looping or unknown fallbacks. |
-| W101 | A seat is over capacity for three months or more. |
-| W102 | A seat is hired, then idle for three months. |
-| W103 | An item starts six months or more before its owner exists, and a person carries it. |
-| W104 | An item starts three months or more after its declared month, or never fits, and why. |
-| W105 | Cash goes negative, and when. |
-| W106 | Most revenue rests on assumed volumes. |
-| W107 | A first-circle item ends after funding year 1. |
-| W108 | A stream never unlocks inside the horizon. |
-| W109 | A seat owns four or more items at once. |
-| W110–W112 | Drift from a reference model: headcount, gross, non-labor share. |
-| W115 | Seats spent on work in the last circle. |
-| W116 | A principal carries more than 1.5× capacity, mostly as fallback for unfilled seats. |
+| E001 | Duplicate item, seat, stream, funding line, non-labor line or scenario id, or circle name. |
+| E002 | Unknown or self dependency, negative lag, or a dependency cycle, named. |
+| E003 | A stream unlocked by an unknown item, or with no volumes. |
+| E004 | An item with no demands, an unknown or duplicate seat, a non-positive FTE, or an owner outside its demands. |
+| E005 | An item with no duration, or a start outside the horizon. |
+| E006 | A seat with no hires, non-positive capacity, an unknown or looping fallback, or the reserved id `external`. |
+| E007 | An item in a circle the plan does not list. |
+| W101 | A seat over capacity for the policy's months, or by the policy's FTE in any month. |
+| W102 | A hire whose role stays under the policy's share of its capacity for the policy's months; the measured share is stated. |
+| W103 | An item starting well before its seat arrives: which hired seat carries it meanwhile, or that nobody does. |
+| W104 | An item starting late against its declared month, or never fitting, with the binding cause. |
+| W105 | Cash going negative: first month and trough. |
+| W106 | More than the policy's share of complete-year revenue resting on assumed volumes. |
+| W107 | A first-circle item ending after funding year 1. |
+| W108 | A stream that never unlocks inside the horizon. |
+| W109 | An owner (explicit, else the first demand) running too many items at once. |
+| W110–W112 | Headcount, gross cost and non-labor share drifting from the reference model, over complete years. |
+| W115 | FTE-months booked to the last circle on seats that are hired in that month, beyond the policy, in plans with more than one circle; external carriage and load on empty roles are not counted. |
+| W116 | A `fallback: null` seat, in months it is hired, carrying more than the policy's multiple of one seat's capacity through funding year 1, with the fallback share stated. |
+
+Thresholds come from `lintPolicy(plan)`; a plan sets its own under `lint`. There are no
+W113 or W114.
 
 ## Compared with TaskJuggler
 
-[TaskJuggler](https://taskjuggler.org/) has done dependencies, resource leveling, cost and
-revenue accounts and scenarios in a text DSL for twenty years, and it is the closest thing to
-this. plangraph differs in what it is for: plans as YAML or JSON that agents write and check;
-explainable bindings on every start; revenue keyed to unlocks with ramps and volumes by year;
-scenarios as overrides; a harness that says where the plan does not make sense; a library
-that renders in a browser. It does less: no working calendars or shifts, no effort-driven
-durations, no shared resource pools across plans, no report engine.
+[TaskJuggler](https://taskjuggler.org/) has done dependencies, resource leveling, accounts
+and scenarios in a text DSL [for twenty years](https://taskjuggler.org/manual-git/change_log.html),
+and it is the closest thing to this. Its scenarios
+[inherit and override](https://taskjuggler.org/tj3/manual/scenario.html) too, and it charges
+accounts [at task start, end or by period](https://taskjuggler.org/tj3/manual/charge.html),
+so neither is where plangraph differs. What is: a compact YAML or JSON graph that agents and
+people write and check, a deterministic binding on every start, and revenue as recurring
+annual volumes with a ramp, keyed to the item that unlocks it. plangraph does less: no
+working calendars or shifts, no effort-driven durations, no shared resource pools across
+plans, no report-definition engine. `report()` and the CLI are fixed, and there is no
+renderer.
 
 ## Not yet
 
-Working calendars and part-time shifts. Effort-driven durations (today duration is fixed and
-demand is per month). Resource pools shared across plans. Cost of capital. A drag interface.
+Critical path and float. Deadlines and latest starts. Working calendars and part-time
+shifts. Effort-driven durations (today duration is fixed and demand is per month). Resource
+pools shared across plans. Priced external work. Cost of capital. A drag interface.
 
 ## License
 
