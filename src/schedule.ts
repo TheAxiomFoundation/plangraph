@@ -13,7 +13,7 @@
 //
 // Every start records the constraint that bound it. Deterministic: same inputs, same output.
 
-import type { Plan, Scenario, SeatDef, SeatId, WorkItem } from "./model.js";
+import { has, ownerOf, table, type Plan, type Scenario, type SeatDef, type SeatId, type WorkItem } from "./model.js";
 
 export type Binding =
   | { kind: "declared" }
@@ -57,13 +57,10 @@ export interface Schedule {
   external: number[];
 }
 
-/** The seat an item is accountable to: its declared owner, else its first demand. */
-export const ownerOf = (i: WorkItem): SeatId | undefined => i.owner ?? i.demands[0]?.seat;
-
 export const effectiveHires = (plan: Plan, scenario: Scenario): Record<SeatId, number[]> => {
-  const out: Record<SeatId, number[]> = Object.create(null);
+  const out = table<number[]>();
   for (const s of plan.seats) {
-    const delay = scenario.hireDelay && Object.hasOwn(scenario.hireDelay, s.id) ? scenario.hireDelay[s.id] : 0;
+    const delay = has(scenario.hireDelay, s.id) ? scenario.hireDelay![s.id] : 0;
     out[s.id] = s.hireMonths.map((m) => Math.max(0, m + delay));
   }
   return out;
@@ -162,7 +159,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
 
   /** Whether the whole run fits from `start`; on failure, the carrier with the largest shortfall. */
   const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; seat: SeatId; carrier: SeatId } => {
-    if (!i.standing && start + duration > H) return { ok: false, seat: ownerOf(i) ?? "", carrier: ownerOf(i) ?? "" };
+    if (!i.standing && start + duration > H) return { ok: false, seat: ownerOf(i), carrier: ownerOf(i) };
     let worst: { short: number; seat: SeatId; carrier: SeatId } | null = null;
     for (let m = start; m < Math.min(start + duration, H); m++) {
       for (const [c, d] of landed(i, m)) {

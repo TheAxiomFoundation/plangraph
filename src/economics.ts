@@ -2,7 +2,7 @@
 // year, burn while items run, revenue after the unlocking item completes, funding on its own
 // clock, and the cash line that results. Monthly, in dollars, deterministic.
 
-import { fundingYear, type Plan } from "./model.js";
+import { fundingYear, has, table, type Plan } from "./model.js";
 import { seatsHired, type Schedule } from "./schedule.js";
 
 export interface Ledger {
@@ -21,10 +21,19 @@ export interface Ledger {
   unlocks: Record<string, number | null>;
 }
 
+const finiteResult = (value: number, context: string): number => {
+  if (!Number.isFinite(value)) throw new Error(`plangraph: non-finite ${context}`);
+  return value;
+};
+
+const addFinite = (row: number[], month: number, value: number, context: string) => {
+  row[month] = finiteResult(row[month] + value, `${context} at month ${month}`);
+};
+
 /** Loaded monthly cost of one seat, escalated from funding year 2. */
 export function monthlyLoaded(plan: Plan, loadedAnnual: number, m: number): number {
   const y = Math.max(0, fundingYear(plan.calendar, m) - 1);
-  return (loadedAnnual * (1 + plan.escalation.rate) ** y) / 12;
+  return finiteResult((loadedAnnual * (1 + plan.escalation.rate) ** y) / 12, `monthly loaded cost at month ${m}`);
 }
 
 export function ledger(plan: Plan, s: Schedule): Ledger {
@@ -36,8 +45,8 @@ export function ledger(plan: Plan, s: Schedule): Ledger {
   for (const seat of plan.seats) {
     for (let m = 0; m < H; m++) {
       const n = seatsHired(s.hires[seat.id], m);
-      headcount[m] += n;
-      labor[m] += n * monthlyLoaded(plan, seat.loadedAnnual, m);
+      addFinite(headcount, m, n, "headcount");
+      addFinite(labor, m, n * monthlyLoaded(plan, seat.loadedAnnual, m), "labor cost");
     }
   }
 
@@ -46,22 +55,22 @@ export function ledger(plan: Plan, s: Schedule): Ledger {
     for (let m = plan.calendar.fundingYearStartMonth; m < H; m++) {
       const y = fundingYear(plan.calendar, m);
       const v = line.byYear[Math.min(y, line.byYear.length) - 1] ?? 0;
-      nonLabor[m] += v / 12;
+      addFinite(nonLabor, m, v / 12, "non-labor cost");
     }
   }
 
   const burn = zeros();
   for (const it of s.items) {
     if (!it.item.burnPerMonth || it.beyond) continue;
-    for (let m = it.start; m < it.end; m++) burn[m] += it.item.burnPerMonth.usd;
+    for (let m = it.start; m < it.end; m++) addFinite(burn, m, it.item.burnPerMonth.usd, "item burn");
   }
 
-  const cost = labor.map((v, m) => v + nonLabor[m] + burn[m]);
+  const cost = labor.map((v, m) => finiteResult(v + nonLabor[m] + burn[m], `total cost at month ${m}`));
 
   const scale = s.scenario.volumeScale ?? 1;
   const byId = new Map(s.items.map((i) => [i.item.id, i]));
-  const revenueByStream: Record<string, number[]> = {};
-  const unlocks: Record<string, number | null> = {};
+  const revenueByStream = table<number[]>();
+  const unlocks = table<number | null>();
   const revenue = zeros();
   for (const st of plan.streams) {
     const it = byId.get(st.unlockedBy);
@@ -73,32 +82,32 @@ export function ledger(plan: Plan, s: Schedule): Ledger {
       for (let m = on; m < H; m++) {
         const k = m - on;
         const year = Math.floor(k / 12);
-        const units = st.volumeByYear.units[Math.min(year, st.volumeByYear.units.length - 1)] * scale;
+        const units = finiteResult(st.volumeByYear.units[Math.min(year, st.volumeByYear.units.length - 1)] * scale, `units for stream "${st.id}" at month ${m}`);
         const ramp = st.rampMonths > 0 && k < st.rampMonths ? (k + 1) / st.rampMonths : 1;
-        row[m] = (units / 12) * ramp * st.price.usd;
+        row[m] = finiteResult((units / 12) * ramp * st.price.usd, `revenue for stream "${st.id}" at month ${m}`);
       }
     } else {
       unlocks[st.id] = null;
     }
     revenueByStream[st.id] = row;
-    for (let m = 0; m < H; m++) revenue[m] += row[m];
+    for (let m = 0; m < H; m++) addFinite(revenue, m, row[m], "total revenue");
   }
 
   const funding = zeros();
-  const fundingByLine: Record<string, number[]> = {};
+  const fundingByLine = table<number[]>();
   for (const f of plan.funding) {
-    const counted = s.scenario.countFunding?.[f.id] ?? f.counted;
+    const counted = has(s.scenario.countFunding, f.id) ? s.scenario.countFunding![f.id] : f.counted;
     const row = counted ? f.byMonth.slice(0, H) : [];
     while (row.length < H) row.push(0);
     fundingByLine[f.id] = row;
-    for (let m = 0; m < H; m++) funding[m] += row[m];
+    for (let m = 0; m < H; m++) addFinite(funding, m, row[m], "total funding");
   }
 
-  const net = cost.map((c, m) => funding[m] + revenue[m] - c);
+  const net = cost.map((c, m) => finiteResult(funding[m] + revenue[m] - c, `net cash flow at month ${m}`));
   const cash = zeros();
-  let acc = 0;
+  let acc = finiteResult(plan.openingCash ?? 0, "opening cash");
   for (let m = 0; m < H; m++) {
-    acc += net[m];
+    acc = finiteResult(acc + net[m], `cash at month ${m}`);
     cash[m] = acc;
   }
 
@@ -107,7 +116,7 @@ export function ledger(plan: Plan, s: Schedule): Ledger {
 
 export const sumRange = (row: number[], from: number, to: number): number => {
   let t = 0;
-  for (let m = Math.max(0, from); m < Math.min(to, row.length); m++) t += row[m];
+  for (let m = Math.max(0, from); m < Math.min(to, row.length); m++) t = finiteResult(t + row[m], `range total at month ${m}`);
   return t;
 };
 

@@ -35,28 +35,75 @@ export function lintPlan(plan: Plan): Finding[] {
   dup(plan.seats.map((s) => s.id), "seat");
   dup(plan.streams.map((s) => s.id), "stream");
   dup(plan.funding.map((f) => f.id), "funding line");
+  dup(plan.nonLabor.map((n) => n.id), "non-labor line");
+  dup((plan.scenarios ?? []).map((s) => s.id), "scenario");
+  dup(plan.circles, "circle");
 
   const itemIds = new Set(plan.items.map((i) => i.id));
   const seatIds = new Set(plan.seats.map((s) => s.id));
+  const circles = new Set(plan.circles);
   for (const i of plan.items) {
+    if (!circles.has(i.circle)) {
+      out.push({ code: "E007", severity: "error", subject: i.id, message: `"${i.label}" uses unknown circle "${i.circle}".`, hint: "Add the circle to the plan's priority list or fix the name." });
+    }
     for (const p of i.predecessors) {
       if (!itemIds.has(p.id)) out.push({ code: "E002", severity: "error", subject: i.id, message: `"${i.label}" depends on unknown item "${p.id}".`, hint: "Add the item or fix the id." });
       if (p.id === i.id) out.push({ code: "E002", severity: "error", subject: i.id, message: `"${i.label}" depends on itself.`, hint: "Remove the self-edge." });
       if ((p.lag ?? 0) < 0) out.push({ code: "E002", severity: "error", subject: i.id, message: `"${i.label}" has a negative lag on "${p.id}".`, hint: "Lags run forward; use an earlier predecessor instead." });
     }
     if (i.demands.length === 0) out.push({ code: "E004", severity: "error", subject: i.id, message: `"${i.label}" demands no seat: nobody owns it.`, hint: "Give it at least one demand." });
+    const demanded = new Set<SeatId>();
     for (const d of i.demands) {
       if (!seatIds.has(d.seat)) out.push({ code: "E004", severity: "error", subject: i.id, message: `"${i.label}" demands unknown seat "${d.seat}".`, hint: "Seat ids come from the plan's seats." });
       if (!(d.fte > 0)) out.push({ code: "E004", severity: "error", subject: i.id, message: `"${i.label}" demands ${d.fte} FTE of ${d.seat}.`, hint: "Demand must be positive." });
+      if (demanded.has(d.seat)) out.push({ code: "E004", severity: "error", subject: i.id, message: `"${i.label}" demands seat "${d.seat}" more than once.`, hint: "Combine the demand into one entry per seat." });
+      demanded.add(d.seat);
+    }
+    if (i.owner !== undefined && !demanded.has(i.owner)) {
+      out.push({ code: "E004", severity: "error", subject: i.id, message: `"${i.label}" names owner "${i.owner}" but does not demand that seat.`, hint: "The owner must be one of the item's demanded seats." });
     }
     if (!i.standing && !(i.duration > 0)) out.push({ code: "E005", severity: "error", subject: i.id, message: `"${i.label}" has no duration.`, hint: "Give it months, or mark it standing." });
     if (i.earliest < 0 || i.earliest >= H) out.push({ code: "E005", severity: "error", subject: i.id, message: `"${i.label}" starts outside the horizon (${i.earliest}).`, hint: `Month indices run 0..${H - 1}.` });
   }
+
+  // General dependency cycles. Unknown edges are already reported above and are skipped;
+  // each back edge names the complete cycle it closes.
+  const byItem = new Map(plan.items.map((item) => [item.id, item]));
+  const state = new Map<string, 0 | 1 | 2>();
+  const stack: string[] = [];
+  const cycles = new Set<string>();
+  const visit = (id: string) => {
+    const item = byItem.get(id);
+    if (!item || state.get(id) === 2) return;
+    state.set(id, 1);
+    stack.push(id);
+    for (const predecessor of item.predecessors) {
+      if (predecessor.id === id || !byItem.has(predecessor.id)) continue;
+      if (state.get(predecessor.id) === 1) {
+        const from = stack.indexOf(predecessor.id);
+        const cycle = [...stack.slice(from), predecessor.id];
+        const key = cycle.join("\0");
+        if (!cycles.has(key)) {
+          cycles.add(key);
+          out.push({ code: "E002", severity: "error", subject: id, message: `Dependency cycle: ${cycle.map((part) => `"${part}"`).join(" -> ")}.`, hint: "Remove an edge so dependencies form a directed acyclic graph." });
+        }
+      } else if (state.get(predecessor.id) !== 2) {
+        visit(predecessor.id);
+      }
+    }
+    stack.pop();
+    state.set(id, 2);
+  };
+  for (const item of plan.items) if (state.get(item.id) === undefined) visit(item.id);
+
   for (const st of plan.streams) {
     if (!itemIds.has(st.unlockedBy)) out.push({ code: "E003", severity: "error", subject: st.id, message: `Stream "${st.label}" is unlocked by unknown item "${st.unlockedBy}".`, hint: "Point it at the item whose completion turns it on." });
     if (st.volumeByYear.units.length === 0) out.push({ code: "E003", severity: "error", subject: st.id, message: `Stream "${st.label}" has no volumes.`, hint: "Give it at least one year of volume." });
   }
   for (const s of plan.seats) {
+    if (s.id === "external") {
+      out.push({ code: "E006", severity: "error", subject: s.id, message: `Seat id "external" is reserved for the external-carrier sentinel.`, hint: "Rename the seat." });
+    }
     const seen = new Set<string>();
     let cur: SeatId | "external" | null = s.fallback;
     while (cur && cur !== "external") {
