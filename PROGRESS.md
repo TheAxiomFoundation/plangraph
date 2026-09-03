@@ -61,9 +61,13 @@
 - Added explicit valid owners to the example without changing its scheduling semantics and
   corrected both leveled scenario gists to acknowledge fixed-load overloads.
 - The documentation state passes 64 tests plus typecheck, build, and the example check.
+- Added `prepack`, a temporary npm pack/install ESM, declarations, and installed-bin
+  integration test, plus explicit Node 20 package coverage in CI.
+- The complete seven-file suite passes 65 tests and 901 assertions, including the offline
+  package test under Node 25; CI performs the clean registry-backed install under Node 20.
+- Typecheck, build, and the example check are clean.
 
 ## Next
 
-1. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
-   push, open the PR, and monitor checks.
+1. Run the full verification suite, push, open the PR, and monitor checks.
 2. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
