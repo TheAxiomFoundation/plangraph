@@ -146,8 +146,10 @@ export interface LintPolicy {
   overloadMonths: number;
   /** ...or by at least this many FTE in any month. */
   overloadPeakFte: number;
-  /** W102: months a new hire may sit under 10% load. */
+  /** W102: months a new hire may sit below the configured load share. */
   idleMonths: number;
+  /** W102: share of actual capacity below which a new hire is idle. */
+  idleLoadShare: number;
   /** W103: months an item may run before its owner exists, with a person carrying it. */
   lateOwnerMonths: number;
   /** W104: months an item may start after its declared month. */
@@ -160,18 +162,22 @@ export interface LintPolicy {
   lastCircleFteMonths: number;
   /** W116: a principal's demand as a multiple of one seat's capacity. */
   principalLoad: number;
+  /** W111: tolerated proportional difference from reference gross cost. */
+  referenceCostTolerance: number;
 }
 
 export const DEFAULT_LINT: LintPolicy = {
   overloadMonths: 3,
   overloadPeakFte: 0.5,
   idleMonths: 3,
+  idleLoadShare: 0.1,
   lateOwnerMonths: 6,
   slipMonths: 3,
   wideOwnerItems: 4,
   assumedRevenueShare: 0.8,
   lastCircleFteMonths: 12,
   principalLoad: 1.5,
+  referenceCostTolerance: 0.15,
 };
 
 export interface Scenario {
@@ -232,7 +238,15 @@ export const LEVELED: Scenario = {
 export const scenariosOf = (plan: Plan): Scenario[] =>
   plan.scenarios && plan.scenarios.length ? plan.scenarios : [AS_PLANNED, LEVELED];
 
-export const lintPolicy = (plan: Plan): LintPolicy => ({ ...DEFAULT_LINT, ...(plan.lint ?? {}) });
+export const lintPolicy = (plan: Plan): LintPolicy => {
+  const policy = { ...DEFAULT_LINT };
+  for (const key of Object.keys(policy) as Array<keyof LintPolicy>) {
+    if (!plan.lint || !Object.prototype.hasOwnProperty.call(plan.lint, key)) continue;
+    const value = plan.lint?.[key];
+    if (value !== undefined) policy[key] = value;
+  }
+  return policy;
+};
 
 /** The accountable seat of an item. */
 export const ownerOf = (item: WorkItem): SeatId => item.owner ?? item.demands[0]?.seat ?? "";

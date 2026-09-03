@@ -1,7 +1,7 @@
 // One report per scenario: the aggregates a planner reads first, then the findings. The CLI
 // prints it; a program can take it as data.
 
-import { afterFundingYears, atFundingYearEnd, beforeFunding, byFundingYear, fundingYears, ledger, type Ledger } from "./economics.js";
+import { afterFundingYears, atFundingYearEnd, beforeFunding, byFundingYear, fundingYears, ledger, sumRange, type Ledger } from "./economics.js";
 import { countBy, lintPlan, lintSchedule, type Finding, type Severity } from "./lint.js";
 import { monthLabel, scenariosOf, table, type Plan, type Scenario } from "./model.js";
 import { overloads, schedule, slips, type Schedule, type Slip } from "./schedule.js";
@@ -22,6 +22,8 @@ export interface ScenarioReport {
   revenueByYear: number[];
   fundingByYear: number[];
   trailing: PeriodTotals;
+  /** Uncosted, uncapped work routed to external carriers over the horizon. */
+  externalFteMonths: number;
   cashTrough: { usd: number; month: string };
   unlocks: Record<string, string | null>;
   slips: Slip[];
@@ -82,6 +84,7 @@ export function report(plan: Plan, only?: string): Report {
         revenue: afterFundingYears(l.revenue, cal),
         funding: afterFundingYears(l.funding, cal),
       },
+      externalFteMonths: sumRange(s.external, 0, s.external.length),
       cashTrough: { usd: trough, month: monthLabel(cal, troughMonth) },
       unlocks,
       slips: slips(base, s),

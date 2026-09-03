@@ -4,7 +4,7 @@
 // says what to do, so an agent editing nodes gets the same feedback a reviewer would give.
 
 import { atFundingYearEnd, byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
-import { monthLabel, type Plan, type SeatId } from "./model.js";
+import { lintPolicy, monthLabel, ownerOf, type Plan, type SeatId } from "./model.js";
 import { overloads, type Schedule } from "./schedule.js";
 
 export type Severity = "error" | "warn" | "info";
@@ -19,6 +19,8 @@ export interface Finding {
 }
 
 const seatTitle = (plan: Plan, id: string) => plan.seats.find((s) => s.id === id)?.title ?? id;
+
+const percent = (share: number): string => `${Number((share * 100).toFixed(1))}%`;
 
 /** Structural checks that need no schedule. */
 export function lintPlan(plan: Plan): Finding[] {
@@ -134,10 +136,11 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const byId = new Map(s.items.map((x) => [x.item.id, x]));
   const years = fundingYears(cal);
   const y1End = cal.fundingYearStartMonth + 12;
+  const policy = lintPolicy(plan);
 
   // W101 overloaded seats.
   for (const o of overloads(s)) {
-    if (o.months.length >= 3) {
+    if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte) {
       out.push({
         code: "W101",
         severity: "warn",
@@ -150,17 +153,22 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W102 idle seats: hired after the plan starts, then under 10% load for three months.
+  // W102 idle seats: hired after the plan starts, then under the configured share of
+  // actual capacity for the configured number of months.
   for (const load of s.loads) {
-    for (const h of s.hires[load.seat]) {
+    for (const h of s.hires[load.seat] ?? []) {
       if (h === 0) continue;
       let idle = 0;
-      for (let m = h; m < Math.min(h + 12, H); m++) {
-        if (load.demand[m] < 0.1 * Math.max(1, load.capacity[m])) idle++;
-        else break;
+      let peakShare = 0;
+      for (let m = h; m < H; m++) {
+        const capacity = load.capacity[m];
+        const share = capacity > 0 ? load.demand[m] / capacity : load.demand[m] > 0 ? Infinity : 0;
+        if (share >= policy.idleLoadShare) break;
+        idle++;
+        peakShare = Math.max(peakShare, share);
       }
-      if (idle >= 3) {
-        out.push({ code: "W102", severity: "warn", subject: load.seat, message: `${seatTitle(plan, load.seat)} hired ${label(h)} carries under 10% load for its first ${idle} months.`, hint: "Hire later, or give the seat an item that starts when it does." });
+      if (idle >= policy.idleMonths) {
+        out.push({ code: "W102", severity: "warn", subject: load.seat, message: `${seatTitle(plan, load.seat)} hired ${label(h)} peaks at ${percent(peakShare)} load for its first ${idle} months.`, hint: "Hire later, or give the seat an item that starts when it does." });
         break;
       }
     }
@@ -175,7 +183,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
         let firstHire = hires[0] ?? H;
         for (let k = 1; k < hires.length; k++) firstHire = Math.min(firstHire, hires[k]);
         const wait = firstHire - it.start;
-        if (wait >= 6) {
+        if (wait >= policy.lateOwnerMonths) {
           out.push({ code: "W103", severity: "warn", subject: it.item.id, message: `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${c.fte.toFixed(2)} FTE meanwhile.`, hint: "Pull the hire forward, fund a contractor, or move the start." });
         }
       }
@@ -190,12 +198,14 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
           ? `no room on ${seatTitle(plan, it.binding.carrier)} inside the horizon`
           : it.binding.kind === "predecessor"
             ? `"${byId.get(it.binding.id)!.item.label}" never finishes`
-            : "declared start";
+            : it.binding.kind === "horizon"
+              ? "its run would extend past the horizon"
+              : "declared start";
       out.push({ code: "W104", severity: "warn", subject: it.item.id, message: `"${it.item.label}" does not fit inside the horizon: ${why}.`, hint: "Lower the effort assumption, add a seat, or drop the item." });
       continue;
     }
     const late = it.start - it.item.earliest;
-    if (late >= 3 && it.binding.kind !== "underway") {
+    if (late >= policy.slipMonths && it.binding.kind !== "underway") {
       const why =
         it.binding.kind === "predecessor"
           ? `waits for "${byId.get(it.binding.id)!.item.label}"`
@@ -220,7 +230,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const assumed = plan.streams
     .filter((st) => st.volumeByYear.basis === "A")
     .reduce((n, st) => n + sumRange(l.revenueByStream[st.id], span[0], span[1]), 0);
-  if (total > 0 && assumed / total > 0.8) {
+  if (total > 0 && assumed / total > policy.assumedRevenueShare) {
     out.push({ code: "W106", severity: "info", subject: s.scenario.id, message: `${Math.round((assumed / total) * 100)}% of revenue over ${years} years rests on assumed volumes.`, hint: "Land a receipt per stream: a rate card, a signed pilot, a contract." });
   }
 
@@ -239,19 +249,18 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (l.unlocks[st.id] === null) out.push({ code: "W108", severity: "warn", subject: st.id, message: `Stream "${st.label}" never unlocks inside the horizon.`, hint: `Its item "${st.unlockedBy}" does not finish by ${label(H - 1)}.` });
   }
 
-  // W109 portfolios too wide: a seat owning four or more concurrent items. The owner is the
-  // first demand on an item.
+  // W109 portfolios too wide: a seat owning too many concurrent items.
   for (const seat of plan.seats) {
     let peak = 0;
     let peakMonth = 0;
     for (let m = 0; m < H; m++) {
-      const n = s.items.filter((it) => !it.beyond && it.start <= m && m < it.end && it.item.demands[0]?.seat === seat.id).length;
+      const n = s.items.filter((it) => !it.beyond && it.start <= m && m < it.end && ownerOf(it.item) === seat.id).length;
       if (n > peak) {
         peak = n;
         peakMonth = m;
       }
     }
-    if (peak >= 4) out.push({ code: "W109", severity: "warn", subject: seat.id, message: `${seat.title} owns ${peak} items at once in ${label(peakMonth)}.`, hint: "Split the mandate, add a report, or accept that these run slower than drawn." });
+    if (peak >= policy.wideOwnerItems) out.push({ code: "W109", severity: "warn", subject: seat.id, message: `${seat.title} owns ${peak} items at once in ${label(peakMonth)}.`, hint: "Split the mandate, add a report, or accept that these run slower than drawn." });
   }
 
   // W110–W112 drift against the reference model, when the plan names one.
@@ -269,7 +278,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (years >= n) {
       const costRef = byFundingYear(l.cost, cal, n).reduce((a, b) => a + b, 0);
       const ratio = costRef / ref.gross;
-      if (ratio < 0.85 || ratio > 1.15) {
+      if (ratio < 1 - policy.referenceCostTolerance || ratio > 1 + policy.referenceCostTolerance) {
         out.push({ code: "W111", severity: "info", subject: s.scenario.id, message: `${n}-year cost ${(costRef / 1e6).toFixed(1)}M is ${Math.round((ratio - 1) * 100)}% off the reference ${(ref.gross / 1e6).toFixed(1)}M.`, hint: "Labor is derived; the non-labor lines are the assumed part. Reconcile there first." });
       }
       const nl = byFundingYear(l.nonLabor.map((v, m) => v + l.burn[m]), cal, n).reduce((a, b) => a + b, 0);
@@ -280,28 +289,41 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W115 seats spent on work outside the last circle, when the plan reserves one for it.
+  // W115 internal seats spent on work in the last circle, when the plan reserves one for it.
   const last = plan.circles[plan.circles.length - 1];
   if (plan.circles.length > 1 && last) {
-    let outsideFte = 0;
-    for (const it of s.items) {
-      if (it.item.circle !== last || it.beyond) continue;
-      for (const c of it.carriers) outsideFte += c.fte * (it.end - it.start);
+    let internalFte = 0;
+    for (const booking of s.bookings) {
+      if (booking.circle !== last || booking.carrier === "external") continue;
+      internalFte += booking.fte;
+      if (!Number.isFinite(internalFte)) throw new Error(`plangraph: non-finite internal FTE-months in circle "${last}"`);
     }
-    if (outsideFte > 12) {
-      out.push({ code: "W115", severity: "info", subject: last, message: `${Math.round(outsideFte)} FTE-months of seats go to work in the last circle (${last}).`, hint: "Fund it separately, or say plainly that the base seats carry it." });
+    if (internalFte > policy.lastCircleFteMonths) {
+      out.push({ code: "W115", severity: "info", subject: last, message: `${Number(internalFte.toFixed(2))} internal FTE-months go to work in the last circle (${last}).`, hint: "Fund it separately, or say plainly that the base seats carry it." });
     }
   }
 
   // W116 principals (in place, no fallback) carrying unfilled seats' work.
   for (const seat of plan.seats.filter((x) => x.fallback === null)) {
-    const load = s.loads.find((x) => x.seat === seat.id);
-    if (!load) continue;
-    const window = load.demand.slice(0, Math.min(H, y1End));
-    const worst = Math.max(0, ...window);
-    if (worst > 1.5 * Math.max(1, seat.capacityFte)) {
-      const m = load.demand.indexOf(worst);
-      out.push({ code: "W116", severity: "warn", subject: seat.id, message: `${seat.title} carries ${worst.toFixed(2)} FTE of demand in ${label(m)}, much of it as fallback for unfilled seats.`, hint: "A single point of failure made visible. Shorten the searches or widen the bridge." });
+    let worst: { month: number; total: number; fallback: number } | null = null;
+    for (let m = 0; m < Math.min(H, y1End); m++) {
+      let total = 0;
+      let fallback = 0;
+      for (const booking of s.bookings) {
+        if (booking.month !== m || booking.carrier !== seat.id) continue;
+        total += booking.fte;
+        if (booking.seat !== seat.id) fallback += booking.fte;
+      }
+      if (
+        fallback > 0 &&
+        total > policy.principalLoad * seat.capacityFte &&
+        (worst === null || total > worst.total)
+      ) {
+        worst = { month: m, total, fallback };
+      }
+    }
+    if (worst) {
+      out.push({ code: "W116", severity: "warn", subject: seat.id, message: `${seat.title} carries ${worst.total.toFixed(2)} FTE of demand in ${label(worst.month)}; ${percent(worst.fallback / worst.total)} is fallback for unfilled seats.`, hint: "A single point of failure made visible. Shorten the searches or widen the bridge." });
     }
   }
 

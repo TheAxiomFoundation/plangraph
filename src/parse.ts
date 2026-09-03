@@ -218,12 +218,14 @@ export function parsePlan(input: unknown): Plan {
       for (const key of ["overloadPeakFte", "lastCircleFteMonths", "principalLoad"]) {
         if (p.lint[key] !== undefined) need(finite(p.lint[key]) && p.lint[key] >= 0, `plan.lint.${key}`, "must be a finite number >= 0");
       }
-      if (p.lint.assumedRevenueShare !== undefined) {
-        need(
-          finite(p.lint.assumedRevenueShare) && p.lint.assumedRevenueShare >= 0 && p.lint.assumedRevenueShare <= 1,
-          "plan.lint.assumedRevenueShare",
-          "must be a finite number from 0 through 1",
-        );
+      for (const key of ["idleLoadShare", "assumedRevenueShare", "referenceCostTolerance"]) {
+        if (p.lint[key] !== undefined) {
+          need(
+            finite(p.lint[key]) && p.lint[key] >= 0 && p.lint[key] <= 1,
+            `plan.lint.${key}`,
+            "must be a finite number from 0 through 1",
+          );
+        }
       }
     }
   }

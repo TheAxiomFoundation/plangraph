@@ -5,7 +5,7 @@
 - Branch: `review-fixes`
 - Starting point: `06cf875`
 - Audit: `plangraph-review-2026-09-03.out.md`, read in full
-- Current phase: making lint heuristics measured and policy-driven
+- Current phase: hardening CLI usage, preflight, and baseline comparison behavior
 
 ## Done
 
@@ -36,13 +36,19 @@
   cash with `openingCash`, and stopped incomplete reference spans from fabricating values.
 - Added four shifted-clock, endpoint, reconciliation, and opening-cash tests; 47 tests pass,
   and typecheck, build, and the example check are clean.
+- Routed every lint materiality threshold through `lintPolicy`, including measured idle share
+  and reference-cost tolerance.
+- Corrected W101/W102/W109/W115/W116 with actual capacity, explicit ownership, and monthly
+  booking data; W116 now reports its measured fallback share.
+- Added `externalFteMonths` to scenario reports while keeping external work uncapped and
+  uncosted, and excluded it from W115 internal capacity.
+- Added nine lint/external policy tests; 56 tests pass, and typecheck, build, and the example
+  check are clean.
 
 ## Next
 
-1. Make lint findings truthful, booking-based, and policy-driven; expose counted external
-   FTE-months in reports (A3, A10; B5, B7; D8).
-2. Harden CLI selection/error behavior and selected-scenario comparisons (A11; D5, D9).
-3. Apply README corrections C1–C15 and document ESM/package semantics.
-4. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
+1. Harden CLI selection/error behavior and selected-scenario comparisons (A11; D5, D9).
+2. Apply README corrections C1–C15 and document ESM/package semantics.
+3. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
    push, open the PR, and monitor checks.
-5. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
+4. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
