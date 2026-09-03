@@ -4,11 +4,11 @@ import {
   PlanParseError,
   ledger,
   lintPlan,
-  loadPlanFile,
   parsePlan,
   report,
   schedule,
 } from "../src/index";
+import { loadPlanFile } from "../src/node";
 
 const studio = () => loadPlanFile(new URL("../examples/studio.yaml", import.meta.url).pathname);
 const rawStudio = (): Record<string, any> => structuredClone(studio()) as unknown as Record<string, any>;

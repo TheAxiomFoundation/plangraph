@@ -1,8 +1,7 @@
-// Reading a plan from data. Plans are plain JSON so an agent or a person can write one
-// without a build step. Parsing establishes the complete runtime shape and reports every
+// Reading a plan from data. Plans are plain JSON or YAML so an agent or a person can write one
+// without a build step. This module never touches the filesystem; loadPlanFile lives in node.ts. Parsing establishes the complete runtime shape and reports every
 // problem with its path; the harness then checks graph-wide meaning.
 
-import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import type { Basis, Plan } from "./model.js";
 
@@ -272,9 +271,7 @@ export function parsePlan(input: unknown): Plan {
   return p as unknown as Plan;
 }
 
-/** Read a plan from a .json, .yaml or .yml file. YAML is for people (comments carry provenance); JSON is the interchange. */
-export function loadPlanFile(path: string): Plan {
-  const text = readFileSync(path, "utf8");
-  const data = /\.ya?ml$/i.test(path) ? parseYaml(text) : JSON.parse(text);
-  return parsePlan(data);
+/** Parse a plan from text. YAML is for people (comments carry provenance); JSON is the interchange. */
+export function parsePlanText(text: string, format: "json" | "yaml" = "json"): Plan {
+  return parsePlan(format === "yaml" ? parseYaml(text) : JSON.parse(text));
 }

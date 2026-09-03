@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { AS_PLANNED, loadPlanFile, parsePlan, report, type Plan } from "../src/index";
+import { AS_PLANNED, parsePlan, report, type Plan } from "../src/index";
+import { loadPlanFile } from "../src/node";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const cli = join(root, "src/cli.ts");

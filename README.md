@@ -33,13 +33,15 @@ bun src/cli.ts check my-plan.json --json --scenario leveled
 Or from an ESM program:
 
 ```ts
-import { loadPlanFile, report } from "plangraph";
+import { report } from "plangraph";
+import { loadPlanFile } from "plangraph/node";
 const result = report(loadPlanFile("my-plan.json"));
 for (const s of result.scenarios) console.log(s.scenario.name, s.costByYear, s.findings);
 ```
 
-The package is ESM-only and needs Node 20 or newer. The root export includes
-`loadPlanFile`, which reads from `node:fs`, so it is a Node entry point, not a browser one.
+The package is ESM-only and needs Node 20 or newer. The root export never touches the
+filesystem, so a browser bundle can import the engine and `parsePlan`/`parsePlanText`
+directly; `plangraph/node` adds `loadPlanFile`, which reads from `node:fs`.
 
 ## The model
 

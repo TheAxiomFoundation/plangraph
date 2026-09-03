@@ -82,7 +82,9 @@ describe("packed package", () => {
         join(consumer, "runtime.mjs"),
         [
           'import { report } from "plangraph";',
+          'import { loadPlanFile } from "plangraph/node";',
           'if (typeof report !== "function") throw new Error("report export did not resolve");',
+          'if (typeof loadPlanFile !== "function") throw new Error("plangraph/node export did not resolve");',
           'console.log(typeof report);',
         ].join("\n"),
       );

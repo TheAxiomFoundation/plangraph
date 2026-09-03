@@ -5,7 +5,8 @@
 // the findings, and exits non-zero on errors. Run under `bun --watch` for feedback on save.
 
 import { monthLabel, scenariosOf } from "./model.js";
-import { loadPlanFile, PlanParseError } from "./parse.js";
+import { loadPlanFile } from "./node.js";
+import { PlanParseError } from "./parse.js";
 import { report } from "./report.js";
 
 const args = process.argv.slice(2);
