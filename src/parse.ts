@@ -151,6 +151,7 @@ export function parsePlan(input: unknown): Plan {
     need(typeof item.standing === "boolean", `${path}.standing`, "must be a boolean");
     if (item.standing === false) need(integer(item.duration) && item.duration >= 1, `${path}.duration`, "must be an integer >= 1 for non-standing work");
     need(typeof item.underway === "boolean", `${path}.underway`, "must be a boolean");
+    if (item.priority !== undefined) need(finite(item.priority), `${path}.priority`, "must be a finite number");
     need(arr(item.predecessors), `${path}.predecessors`, "must be an array");
     if (arr(item.predecessors)) {
       Array.from(item.predecessors).forEach((predecessor, j) => {
@@ -241,6 +242,7 @@ export function parsePlan(input: unknown): Plan {
     need(arr(p.scenarios), "plan.scenarios", "must be an array");
     if (arr(p.scenarios)) {
       const seatIds = new Set(seats.filter(isObj).map((seat) => seat.id).filter(nonEmptyString));
+      const itemIds = new Set((items as unknown[]).filter(isObj).map((item) => item.id).filter(nonEmptyString));
       const hireCounts = new Map<string, number>((seats as unknown[]).filter(isObj).filter((seat) => nonEmptyString(seat.id) && arr(seat.hireMonths)).map((seat) => [seat.id as string, (seat.hireMonths as unknown[]).length]));
       const fundingIds = new Set(funding.filter(isObj).map((line) => line.id).filter(nonEmptyString));
       Array.from(p.scenarios).forEach((scenario, i) => {
@@ -273,6 +275,10 @@ export function parsePlan(input: unknown): Plan {
               need(arr(ks) && ks.every((k: unknown) => integer(k) && (k as number) >= 0 && (hireCount === undefined || (k as number) < hireCount)), `${path}.dropHires.${key}`, "must list indices into the seat's hireMonths");
             }
           }
+        }
+        if (scenario.dropItems !== undefined) {
+          need(arr(scenario.dropItems), `${path}.dropItems`, "must be an array of item ids");
+          if (arr(scenario.dropItems)) scenario.dropItems.forEach((id: unknown, k: number) => need(typeof id === "string" && itemIds.has(id), `${path}.dropItems[${k}]`, "must name a known item"));
         }
         if (scenario.dropSeats !== undefined) {
           need(arr(scenario.dropSeats), `${path}.dropSeats`, "must be an array of seat ids");

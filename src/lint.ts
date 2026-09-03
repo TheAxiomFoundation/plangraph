@@ -204,6 +204,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
 
   // W104 slips against the declared start, with the binding constraint.
   for (const it of s.items) {
+    if (it.dropped) continue;
     if (it.beyond) {
       const why =
         it.binding.kind === "capacity"

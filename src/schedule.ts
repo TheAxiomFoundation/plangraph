@@ -20,7 +20,8 @@ export type Binding =
   | { kind: "underway" }
   | { kind: "predecessor"; id: string }
   | { kind: "capacity"; seat: SeatId; carrier: SeatId }
-  | { kind: "horizon" };
+  | { kind: "horizon" }
+  | { kind: "dropped" };
 
 export interface Scheduled {
   item: WorkItem;
@@ -31,6 +32,8 @@ export interface Scheduled {
   duration: number;
   /** True when the item cannot complete inside the horizon. It books nothing. */
   beyond: boolean;
+  /** True when the scenario drops the item: it does not exist, books nothing, and no finding names it. */
+  dropped?: boolean;
   binding: Binding;
   /** Who carries each demand at the start month: the seat, or its fallback. Empty when beyond. */
   carriers: { seat: SeatId; carrier: SeatId | "external"; fte: number }[];
@@ -143,7 +146,7 @@ function order(items: WorkItem[], circles: string[]): WorkItem[] {
     return k < 0 ? circles.length : k;
   };
   const cmp = (a: WorkItem, b: WorkItem) =>
-    pri(a.circle) - pri(b.circle) || a.earliest - b.earliest || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    pri(a.circle) - pri(b.circle) || (a.priority ?? 0) - (b.priority ?? 0) || a.earliest - b.earliest || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const visited = new Set<string>();
   const visiting = new Set<string>();
   const out: WorkItem[] = [];
@@ -224,8 +227,10 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       }
       let worst: { short: number; seat: SeatId; carrier: SeatId } | null = null;
       for (const [carrier, demand] of landed) {
-        if (unlevelled.has(carrier)) continue; // leadership absorbs; the overload is reported, not scheduled around
         const load = loads.get(carrier);
+        // Leadership absorbs rather than slips, so its overload is reported, not scheduled around;
+        // but an unhired leadership seat has nobody to absorb, and its work waits for the hire.
+        if (unlevelled.has(carrier) && (load?.capacity[m] ?? 0) > 0) continue;
         const short = load ? load.demand[m] + demand.fte - load.capacity[m] : demand.fte;
         const earlier =
           worst !== null &&
@@ -258,10 +263,16 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
     }
   };
 
+  const droppedItems = new Set(scenario.dropItems ?? []);
   for (const i of order(plan.items, plan.circles)) {
     let start = Math.max(0, i.earliest);
     let binding: Binding = i.underway ? { kind: "underway" } : { kind: "declared" };
     let beyond = false;
+    if (droppedItems.has(i.id)) {
+      // Not in this scenario: no run, no bookings; dependents treat it as never arriving.
+      done.set(i.id, { item: i, start, end: start, duration: 0, beyond: true, dropped: true, binding: { kind: "dropped" }, carriers: [] });
+      continue;
+    }
     if (!i.underway) {
       for (const p of [...i.predecessors].sort((x, y) => (x.id < y.id ? -1 : 1))) {
         const pd = done.get(p.id)!;

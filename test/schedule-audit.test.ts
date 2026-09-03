@@ -506,4 +506,47 @@ describe("demand profiles", () => {
     expect(delayed.hireIndex.x).toEqual([0, 1, 2]);
     expect(delayed.loads[0].capacity.slice(0, 4)).toEqual([2, 2, 2, 3]);
   });
+
+  it("an unhired leadership seat cannot absorb: its item waits for the hire when leveling", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      seats: [role("cto", { hireMonths: [4], unlevelled: true })],
+      items: [work("a", { duration: 2, demands: [{ seat: "cto", fte: 0.3, basis: "A" }] })],
+    });
+    expect(scheduled(plan, "a", AS_PLANNED).start).toBe(0); // as planned: reported, not moved
+    const leveled = scheduled(plan, "a", LEVELED);
+    expect(leveled.start).toBe(4);
+    expect(leveled.binding).toEqual({ kind: "capacity", seat: "cto", carrier: "cto" });
+    // Once the seat exists it absorbs any overload.
+    const busy = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      seats: [role("cto", { hireMonths: [0], unlevelled: true })],
+      items: [work("a", { duration: 2, demands: [{ seat: "cto", fte: 3, basis: "A" }] })],
+    });
+    expect(scheduled(busy, "a", LEVELED).start).toBe(0);
+  });
+
+  it("a dropped item books nothing, warns nothing, and its dependents never arrive", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 6, fundingYearStartMonth: 0 },
+      items: [work("a", { duration: 2 }), work("b", { duration: 2, predecessors: [{ id: "a" }] })],
+    });
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a"] });
+    const a = s.items.find((it) => it.item.id === "a")!;
+    expect(a.dropped).toBe(true);
+    expect(a.binding).toEqual({ kind: "dropped" });
+    expect(s.bookings.filter((b) => b.item === "a")).toEqual([]);
+    expect(s.items.find((it) => it.item.id === "b")!.beyond).toBe(true);
+    const findings = lintAll(plan, s, ledger(plan, s));
+    expect(findings.filter((f) => f.subject === "a")).toEqual([]);
+  });
+
+  it("priority books ahead of the id order inside a circle", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 6, fundingYearStartMonth: 0 },
+      items: [work("a", { duration: 2 }), work("b", { duration: 2, priority: -1 })],
+    });
+    expect(scheduled(plan, "b").start).toBe(0);
+    expect(scheduled(plan, "a").start).toBe(2);
+  });
 });

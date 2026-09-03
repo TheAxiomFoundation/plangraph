@@ -121,6 +121,8 @@ export interface WorkItem {
   demands: Demand[];
   /** True when the item has already begun: its start is a fact, not a decision. */
   underway: boolean;
+  /** Booking order inside a circle when leveling: lower first, default 0. Ties fall to the earliest start, then the id. */
+  priority?: number;
   /** Non-labor burn per month while the item runs, if any. */
   burnPerMonth?: { usd: number; basis: Basis; note: string };
 }
@@ -221,6 +223,8 @@ export interface Scenario {
   dropSeats?: SeatId[];
   /** Individual hires that do not exist in this scenario: indices into the role's hireMonths. */
   dropHires?: Record<SeatId, number[]>;
+  /** Items that do not exist in this scenario (a pilot whose funding is not counted, say): no run, no bookings, no findings. */
+  dropItems?: string[];
   /** Multiply every stream's volumes. Positive. */
   volumeScale?: number;
   /** Funding lines to count, by id, overriding each line's default. */
