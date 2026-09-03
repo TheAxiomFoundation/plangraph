@@ -9,7 +9,8 @@ every start it produces carries the constraint that bound it, so "why is this la
 output rather than an argument. When two constraints bind in the same month the label names
 one of them, chosen the same way every time.
 
-It comes with a harness. With `bun run watch`, every save re-schedules every scenario and
+It comes with a harness. With `plangraph watch <plan>`, every save of the plan file
+re-schedules every scenario and
 prints the aggregates a planner reads first and the findings a reviewer would raise: seats
 over capacity, hires sitting idle, work carried before its seat arrives, slips and their
 cause, cash going negative, revenue that rests on assumptions, streams that never unlock,
@@ -26,7 +27,7 @@ itself is built to `dist`.
 ```sh
 bun install
 bun run check          # schedules examples/studio.yaml and prints the report
-bun run watch          # the same, on every save
+bun run watch          # the same, again on every save of the plan file
 bun src/cli.ts check my-plan.json --json --scenario leveled
 ```
 
@@ -47,8 +48,8 @@ directly; `plangraph/node` adds `loadPlanFile`, which reads from `node:fs`.
 
 | Node | What it carries |
 |---|---|
-| Seat | `loadedAnnual` cost (or `loadedAnnualByYear`, one value per funding year with the last holding, for sources that escalate salary and then load it), `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. |
-| Work item | `earliest` month, a finite `duration` or `standing` (runs to the horizon), `predecessors` with optional lag, `demands` in FTE per month per seat, an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, and a `circle`, its priority group. |
+| Seat | `loadedAnnual` cost, optionally `loadedAnnualByYear` (one value per funding year, the last holding), which replaces the flat escalation for sources that escalate salary and then load it; `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. |
+| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat, an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, and a `circle`, its priority group. |
 | Revenue stream | `unlockedBy` an item, `price`, recurring annual `volumeByYear` after unlock, `rampMonths`. |
 | Funding line | dollars `byMonth`, `counted` by default or overridden by a scenario. |
 | Non-labor line | dollars `byYear` on the funding calendar. |
@@ -72,9 +73,11 @@ The scheduler takes items in priority order (circle, then declared start, then i
 predecessors first, which can pull a lower-priority predecessor ahead of unrelated work. Ids
 break ties for scarce capacity. It is a serial heuristic, not an optimizer.
 
-Each item starts at the latest of its declared month, its predecessors' ends (a standing
-predecessor releases its successors one month after it starts), and, when leveling, the
-first month from which every carrier it needs has room for the whole run. Demands are
+Each planned item starts at the latest of its declared month, its predecessors' ends (a
+standing predecessor releases its successors one month after it starts), and, when leveling,
+the first month from which every carrier it needs has room for the whole run. Work marked
+`underway` keeps its declared start: it waits for nothing, is not leveled, and a beyond
+predecessor does not take it beyond. Demands are
 resolved to carriers month by month and added up per carrier before they are compared with
 capacity, so two demands that land on the same person count together. A finite item that
 cannot finish inside the horizon, underway or not, goes beyond it: it books nothing,
@@ -102,11 +105,11 @@ projection of the same.
 | E003 | A stream unlocked by an unknown item, or with no volumes. |
 | E004 | An item with no demands, an unknown or duplicate seat, a non-positive FTE, or an owner outside its demands. |
 | E005 | An item with no duration, or a start outside the horizon. |
-| E006 | A seat with no hires, an unknown or looping fallback, or the reserved id `external`. |
+| E006 | A seat with no hires, non-positive capacity, an unknown or looping fallback, or the reserved id `external`. |
 | E007 | An item in a circle the plan does not list. |
 | W101 | A seat over capacity for the policy's months, or by the policy's FTE in any month. |
 | W102 | A hire whose role stays under the policy's share of its capacity for the policy's months; the measured share is stated. |
-| W103 | An item starting well before its seat arrives, with another internal seat carrying it. |
+| W103 | An item starting well before its seat arrives: which hired seat carries it meanwhile, or that nobody does. |
 | W104 | An item starting late against its declared month, or never fitting, with the binding cause. |
 | W105 | Cash going negative: first month and trough. |
 | W106 | More than the policy's share of complete-year revenue resting on assumed volumes. |
@@ -114,8 +117,8 @@ projection of the same.
 | W108 | A stream that never unlocks inside the horizon. |
 | W109 | An owner (explicit, else the first demand) running too many items at once. |
 | W110–W112 | Headcount, gross cost and non-labor share drifting from the reference model, over complete years. |
-| W115 | Internal FTE-months booked to the last circle beyond the policy, in plans with more than one circle; external carriage is stated separately. |
-| W116 | A `fallback: null` seat carrying more than the policy's multiple of one seat's capacity through funding year 1, with the fallback share stated. |
+| W115 | FTE-months booked to the last circle on seats that are hired in that month, beyond the policy, in plans with more than one circle; external carriage and load on empty roles are not counted. |
+| W116 | A `fallback: null` seat, in months it is hired, carrying more than the policy's multiple of one seat's capacity through funding year 1, with the fallback share stated. |
 
 Thresholds come from `lintPolicy(plan)`; a plan sets its own under `lint`. There are no
 W113 or W114.

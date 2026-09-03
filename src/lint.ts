@@ -129,6 +129,9 @@ export function lintPlan(plan: Plan): Finding[] {
 
 /** Checks that need the schedule and the money. */
 export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
+  const capacityOf = new Map(s.loads.map((l) => [l.seat, l.capacity]));
+  /** Whether a carrier id is a hired seat in a month; an empty terminal role or "external" is not. */
+  const staffedAt = (carrier: string, m: number): boolean => carrier !== "external" && (capacityOf.get(carrier)?.[m] ?? 0) > 0;
   const out: Finding[] = [];
   const cal = plan.calendar;
   const H = cal.horizonMonths;
@@ -184,7 +187,10 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
         for (let k = 1; k < hires.length; k++) firstHire = Math.min(firstHire, hires[k]);
         const wait = firstHire - it.start;
         if (wait >= policy.lateOwnerMonths) {
-          out.push({ code: "W103", severity: "warn", subject: it.item.id, message: `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${c.fte.toFixed(2)} FTE meanwhile.`, hint: "Pull the hire forward, fund a contractor, or move the start." });
+          const message = staffedAt(c.carrier, it.start)
+            ? `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${c.fte.toFixed(2)} FTE meanwhile.`
+            : `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later, and nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}.`;
+          out.push({ code: "W103", severity: "warn", subject: it.item.id, message, hint: "Pull the hire forward, fund a contractor, or move the start." });
         }
       }
     }
@@ -294,7 +300,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   if (plan.circles.length > 1 && last) {
     let internalFte = 0;
     for (const booking of s.bookings) {
-      if (booking.circle !== last || booking.carrier === "external") continue;
+      if (booking.circle !== last || !staffedAt(booking.carrier, booking.month)) continue;
       internalFte += booking.fte;
       if (!Number.isFinite(internalFte)) throw new Error(`plangraph: non-finite internal FTE-months in circle "${last}"`);
     }
@@ -307,6 +313,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   for (const seat of plan.seats.filter((x) => x.fallback === null)) {
     let worst: { month: number; total: number; fallback: number } | null = null;
     for (let m = 0; m < Math.min(H, y1End); m++) {
+      if (!staffedAt(seat.id, m)) continue; // an empty role is nobody, not a principal
       let total = 0;
       let fallback = 0;
       for (const booking of s.bookings) {

@@ -140,6 +140,7 @@ export function parsePlan(input: unknown): Plan {
     requiredString(item.label, `${path}.label`);
     requiredString(item.circle, `${path}.circle`, true);
     if (item.owner !== undefined) requiredString(item.owner, `${path}.owner`, true);
+    if (item.standing === true && item.duration === undefined) item.duration = 1; // standing work runs to the horizon; a duration is not needed
     need(integer(item.earliest) && item.earliest >= 0 && (horizon === undefined || item.earliest < horizon), `${path}.earliest`, "must be an integer inside the horizon");
     need(integer(item.duration), `${path}.duration`, "must be an integer");
     need(typeof item.standing === "boolean", `${path}.standing`, "must be a boolean");

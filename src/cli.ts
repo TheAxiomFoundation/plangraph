@@ -1,8 +1,15 @@
 #!/usr/bin/env node
-// plangraph check <plan.json> [--scenario id] [--json]
+// plangraph check <plan.json|yaml> [--scenario id] [--json]
+// plangraph watch <plan.json|yaml> [--scenario id] [--json]
 //
-// Schedules every scenario the plan carries (or the two defaults), prints the aggregates and
-// the findings, and exits non-zero on errors. Run under `bun --watch` for feedback on save.
+// check: schedules every scenario the plan carries (or the two defaults), prints the aggregates
+// and the findings, and exits non-zero on errors. watch: the same, then again on every save of
+// the plan file, until interrupted. (`bun --watch` only follows imported modules, and a plan
+// is read from disk, so the watch is the CLI's own.)
+
+import { spawnSync } from "node:child_process";
+import { watch as watchDir } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 
 import { monthLabel, scenariosOf } from "./model.js";
 import { loadPlanFile } from "./node.js";
@@ -36,9 +43,33 @@ const errorLine = (error: unknown): string => {
   return message.startsWith("plangraph:") ? message : `plangraph: ${message}`;
 };
 
-if (cmd !== "check" || !file || file.startsWith("--")) fail("usage: plangraph check <plan.json> [--scenario id] [--json]", 2);
+if ((cmd !== "check" && cmd !== "watch") || !file || file.startsWith("--")) fail("usage: plangraph check|watch <plan.json|yaml> [--scenario id] [--json]", 2);
 if (scenarioIndex >= 0 && (!scenarioValue || scenarioValue.startsWith("--"))) fail("plangraph: --scenario requires an id", 2);
 const only = scenarioIndex >= 0 ? scenarioValue : undefined;
+
+if (cmd === "watch") {
+  // Re-run `check` as a child on every save of the plan file. The child carries the exit code
+  // and all the printing; this process only watches. Debounced, because editors write twice.
+  const target = resolve(file);
+  const checkArgs = [process.argv[1], "check", ...args.slice(1)];
+  const runOnce = () => {
+    console.log(`\n── ${new Date().toISOString().slice(11, 19)} · ${basename(target)}`);
+    const result = spawnSync(process.execPath, checkArgs, { stdio: "inherit" });
+    if (result.error) console.error(errorLine(result.error));
+  };
+  runOnce();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const watcher = watchDir(dirname(target), (_event, name) => {
+    if (name && name.toString() !== basename(target)) return;
+    clearTimeout(timer);
+    timer = setTimeout(runOnce, 150);
+  });
+  console.log(`watching ${target}; Ctrl-C to stop`);
+  process.on("SIGINT", () => {
+    watcher.close();
+    process.exit(0);
+  });
+} else {
 
 const plan = (() => {
   try {
@@ -135,3 +166,4 @@ for (const s of r.scenarios) {
 }
 console.log(r.errors ? `\n✗ ${r.errors} error(s)` : "\n✓ no errors");
 process.exit(r.errors ? 1 : 0);
+}
