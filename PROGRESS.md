@@ -5,7 +5,7 @@
 - Branch: `review-fixes`
 - Starting point: `06cf875`
 - Audit: `plangraph-review-2026-09-03.out.md`, read in full
-- Current phase: completing carrier-by-month scheduling semantics
+- Current phase: reconciling the funding clock and opening balance
 
 ## Done
 
@@ -21,15 +21,21 @@
   and report, including `__proto__` and `toString` regressions.
 - Added thirteen validation/preflight/prototype tests, including sparse-array, reserved-id,
   and derived-overflow guards; 30 committed tests pass and typecheck is clean.
+- Completed whole-run horizon enforcement, including standing work that reaches the horizon,
+  with zero load, carriers, or bookings for beyond items.
+- Preserved each demand's source/carrier placement month by month while aggregating only for
+  feasibility; mixed own/fallback fixed load and tied bindings are now deterministic.
+- Added explicit per-month bookings, deep fallback/external coverage, the chosen all-or-nothing
+  partial-staffing policy, standing metadata, slip, exact revenue, and numeric-closure tests.
+- 43 tests pass; typecheck and the example check are clean.
 
 ## Next
 
-1. Complete carrier-by-month feasibility, per-demand booking integrity, fallback/external
-   accounting, horizon edges, and scheduling/revenue tests (A1–A5; B2, B4, B5; D1–D3, D6).
-2. Reconcile the funding clock and opening cash (A7; B3; D7).
-3. Make lint findings truthful and policy-driven (A10; B7; D8).
-4. Harden CLI selection/error behavior and selected-scenario comparisons (A11; D9).
-5. Apply README corrections C1–C15 and document ESM/package semantics.
-6. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
+1. Reconcile the funding clock and opening cash (A7; B3; D7).
+2. Make lint findings truthful, booking-based, and policy-driven; expose counted external
+   FTE-months in reports (A3, A10; B5, B7; D8).
+3. Harden CLI selection/error behavior and selected-scenario comparisons (A11; D5, D9).
+4. Apply README corrections C1–C15 and document ESM/package semantics.
+5. Add the clean-pack integration test and CI wiring (D10), run the full verification suite,
    push, open the PR, and monitor checks.
-7. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.
+6. Write `out.md` with the PR URL, final test count, audit-to-commit table, and disagreements.

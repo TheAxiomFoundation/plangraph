@@ -46,6 +46,18 @@ export interface SeatLoad {
   capacity: number[];
 }
 
+/** One demand placement in one booked month. */
+export interface Booking {
+  item: string;
+  circle: string;
+  month: number;
+  /** The seat named by the item's demand. */
+  seat: SeatId;
+  /** The seat (or external provider) that carries the demand in this month. */
+  carrier: SeatId | "external";
+  fte: number;
+}
+
 export interface Schedule {
   scenario: Scenario;
   horizon: number;
@@ -55,13 +67,24 @@ export interface Schedule {
   hires: Record<SeatId, number[]>;
   /** FTE-months routed to external carriers, by month: uncosted and uncapped, but counted. */
   external: number[];
+  /** Per-demand, per-month placements, including external work. */
+  bookings: Booking[];
 }
+
+const finiteResult = (value: number, context: string): number => {
+  if (!Number.isFinite(value)) throw new Error(`plangraph: non-finite ${context}`);
+  return value;
+};
 
 export const effectiveHires = (plan: Plan, scenario: Scenario): Record<SeatId, number[]> => {
   const out = table<number[]>();
   for (const s of plan.seats) {
     const delay = has(scenario.hireDelay, s.id) ? scenario.hireDelay![s.id] : 0;
-    out[s.id] = s.hireMonths.map((m) => Math.max(0, m + delay));
+    out[s.id] = s.hireMonths.map((m) => {
+      const effective = Math.max(0, m + delay);
+      if (!Number.isSafeInteger(effective)) throw new Error(`plangraph: non-integer effective hire month for seat "${s.id}"`);
+      return effective;
+    });
   }
   return out;
 };
@@ -131,42 +154,57 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
         seat: s.id,
         demand: new Array(H).fill(0),
         fixed: new Array(H).fill(0),
-        capacity: Array.from({ length: H }, (_, m) => seatsHired(hires[s.id], m) * s.capacityFte),
+        capacity: Array.from({ length: H }, (_, m) => finiteResult(seatsHired(hires[s.id], m) * s.capacityFte, `capacity for seat "${s.id}" at month ${m}`)),
       },
     ]),
   );
   const external = new Array(H).fill(0) as number[];
+  const bookings: Booking[] = [];
   const done = new Map<string, Scheduled>();
   const eff = scenario.effortScale ?? 1;
 
   const durationOf = (i: WorkItem, start: number): number => {
     if (i.standing) return Math.max(1, H - start);
     if (i.underway) return i.duration;
-    return Math.max(1, Math.round(i.duration * (scenario.durationScale ?? 1)));
+    const duration = Math.max(1, Math.round(finiteResult(i.duration * (scenario.durationScale ?? 1), `duration for item "${i.id}"`)));
+    if (!Number.isSafeInteger(duration)) throw new Error(`plangraph: non-integer duration for item "${i.id}"`);
+    return duration;
   };
 
-  /** Demands of one item in one month, aggregated by the carrier they land on. */
-  const landed = (i: WorkItem, m: number): Map<SeatId | "external", { fte: number; seat: SeatId }> => {
-    const out = new Map<SeatId | "external", { fte: number; seat: SeatId }>();
-    for (const d of i.demands) {
-      const c = carrierFor(seatDefs, hires, d.seat, m);
-      const cur = out.get(c);
-      if (cur) cur.fte += d.fte * eff;
-      else out.set(c, { fte: d.fte * eff, seat: d.seat });
-    }
-    return out;
-  };
+  /** Per-demand placements for one item in one month. Aggregation would lose fallback attribution. */
+  const placements = (i: WorkItem, m: number): Scheduled["carriers"] =>
+    i.demands.map((d) => ({
+      seat: d.seat,
+      carrier: carrierFor(seatDefs, hires, d.seat, m),
+      fte: finiteResult(d.fte * eff, `demand for item "${i.id}" and seat "${d.seat}"`),
+    }));
 
   /** Whether the whole run fits from `start`; on failure, the carrier with the largest shortfall. */
   const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; seat: SeatId; carrier: SeatId } => {
     if (!i.standing && start + duration > H) return { ok: false, seat: ownerOf(i), carrier: ownerOf(i) };
-    let worst: { short: number; seat: SeatId; carrier: SeatId } | null = null;
     for (let m = start; m < Math.min(start + duration, H); m++) {
-      for (const [c, d] of landed(i, m)) {
-        if (c === "external") continue;
-        const load = loads.get(c);
-        const short = load ? load.demand[m] + d.fte - load.capacity[m] : d.fte;
-        if (short > 1e-9 && (!worst || short > worst.short)) worst = { short, seat: d.seat, carrier: c };
+      const landed = new Map<SeatId, { fte: number; seat: SeatId }>();
+      for (const p of placements(i, m)) {
+        if (p.carrier === "external") continue;
+        const cur = landed.get(p.carrier);
+        if (cur) {
+          cur.fte = finiteResult(cur.fte + p.fte, `landed demand on seat "${p.carrier}" at month ${m}`);
+          if (p.seat < cur.seat) cur.seat = p.seat;
+        } else {
+          landed.set(p.carrier, { fte: p.fte, seat: p.seat });
+        }
+      }
+      let worst: { short: number; seat: SeatId; carrier: SeatId } | null = null;
+      for (const [carrier, demand] of landed) {
+        const load = loads.get(carrier);
+        const short = load ? load.demand[m] + demand.fte - load.capacity[m] : demand.fte;
+        const earlier =
+          worst !== null &&
+          Math.abs(short - worst.short) <= 1e-9 &&
+          (demand.seat < worst.seat || (demand.seat === worst.seat && carrier < worst.carrier));
+        if (short > 1e-9 && (!worst || short > worst.short + 1e-9 || earlier)) {
+          worst = { short, seat: demand.seat, carrier };
+        }
       }
       if (worst) return { ok: false, seat: worst.seat, carrier: worst.carrier };
     }
@@ -175,15 +213,18 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
 
   const book = (i: WorkItem, start: number, duration: number) => {
     for (let m = start; m < Math.min(start + duration, H); m++) {
-      for (const [c, d] of landed(i, m)) {
-        if (c === "external") {
-          external[m] += d.fte;
+      for (const p of placements(i, m)) {
+        bookings.push({ item: i.id, circle: i.circle, month: m, ...p });
+        if (p.carrier === "external") {
+          external[m] = finiteResult(external[m] + p.fte, `external demand at month ${m}`);
           continue;
         }
-        const load = loads.get(c);
+        const load = loads.get(p.carrier);
         if (!load) continue;
-        load.demand[m] += d.fte;
-        if (i.underway || c !== d.seat) load.fixed[m] += d.fte;
+        load.demand[m] = finiteResult(load.demand[m] + p.fte, `demand on seat "${p.carrier}" at month ${m}`);
+        if (i.underway || p.carrier !== p.seat) {
+          load.fixed[m] = finiteResult(load.fixed[m] + p.fte, `fixed demand on seat "${p.carrier}" at month ${m}`);
+        }
       }
     }
   };
@@ -208,6 +249,10 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       }
     }
     let duration = durationOf(i, start);
+    if (!beyond && start >= H) {
+      beyond = true;
+      binding = { kind: "horizon" };
+    }
     if (!beyond && !i.underway) {
       if (scenario.level) {
         let probe = start;
@@ -240,7 +285,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       continue;
     }
     book(i, start, duration);
-    const carriers = [...landed(i, start)].map(([c, d]) => ({ seat: d.seat, carrier: c, fte: d.fte }));
+    const carriers = placements(i, start);
     done.set(i.id, { item: i, start, end: Math.min(start + duration, H), duration, beyond: false, binding, carriers });
   }
 
@@ -251,6 +296,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
     loads: plan.seats.map((s) => loads.get(s.id)!),
     hires,
     external,
+    bookings,
   };
 }
 
@@ -280,7 +326,8 @@ export function overloads(s: Schedule): { seat: SeatId; months: number[]; peak: 
   return s.loads
     .map((l) => {
       const months = l.demand.map((d, m) => (d > l.capacity[m] + 1e-9 ? m : -1)).filter((m) => m >= 0);
-      const peak = Math.max(0, ...l.demand.map((d, m) => d - l.capacity[m]));
+      let peak = 0;
+      for (let m = 0; m < l.demand.length; m++) peak = Math.max(peak, l.demand[m] - l.capacity[m]);
       return { seat: l.seat, months, peak };
     })
     .filter((o) => o.months.length > 0)
