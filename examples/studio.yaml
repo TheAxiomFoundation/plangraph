@@ -1,0 +1,326 @@
+# Northwind Studio: a small fictional plan that exercises every feature.
+# Bases: D derived from a source model, A assumed, M measured. Comments are where provenance goes.
+# Months are indices from calendar.startYear/startMonth; funding years count from fundingYearStartMonth.
+name: Northwind Studio
+calendar:
+  startYear: 2027
+  startMonth: 1
+  horizonMonths: 36
+  fundingYearStartMonth: 0
+circles:
+- launch
+- growth
+- later
+escalation:
+  rate: 0.03
+  basis: A
+seats:
+- id: founder
+  title: Founder
+  loadedAnnual: 160000
+  costBasis: A
+  hireMonths:
+  - 0
+  capacityFte: 1
+  fallback: null
+- id: eng
+  title: Engineer
+  loadedAnnual: 210000
+  costBasis: A
+  hireMonths:
+  - 2
+  - 14
+  capacityFte: 1
+  fallback: founder
+- id: design
+  title: Designer
+  loadedAnnual: 150000
+  costBasis: A
+  hireMonths:
+  - 5
+  capacityFte: 1
+  fallback: external
+- id: sales
+  title: Sales lead
+  loadedAnnual: 170000
+  costBasis: A
+  hireMonths:
+  - 9
+  capacityFte: 1
+  fallback: founder
+items:
+- id: proto
+  lane: product
+  label: Prototype
+  circle: launch
+  earliest: 0
+  duration: 4
+  standing: false
+  underway: true
+  predecessors: []
+  demands:
+  - seat: eng
+    fte: 0.8
+    basis: A
+  - seat: founder
+    fte: 0.4
+    basis: A
+- id: design-system
+  lane: product
+  label: Design system
+  circle: launch
+  earliest: 3
+  duration: 4
+  standing: false
+  underway: false
+  predecessors: []
+  demands:
+  - seat: design
+    fte: 0.7
+    basis: A
+- id: beta
+  lane: product
+  label: Private beta
+  circle: launch
+  earliest: 4
+  duration: 5
+  standing: false
+  underway: false
+  predecessors:
+  - id: proto
+  demands:
+  - seat: eng
+    fte: 0.9
+    basis: A
+  - seat: design
+    fte: 0.3
+    basis: A
+  burnPerMonth:
+    usd: 4000
+    basis: A
+    note: hosting and inference while testers are on
+- id: onboarding
+  lane: product
+  label: Self-serve onboarding
+  circle: launch
+  earliest: 8
+  duration: 3
+  standing: false
+  underway: false
+  predecessors:
+  - id: beta
+  - id: design-system
+  demands:
+  - seat: eng
+    fte: 0.6
+    basis: A
+  - seat: design
+    fte: 0.4
+    basis: A
+- id: launch
+  lane: go-to-market
+  label: Public launch
+  circle: launch
+  earliest: 11
+  duration: 2
+  standing: false
+  underway: false
+  predecessors:
+  - id: onboarding
+  demands:
+  - seat: founder
+    fte: 0.5
+    basis: A
+  - seat: sales
+    fte: 0.6
+    basis: A
+- id: support
+  lane: operations
+  label: Support and upkeep
+  circle: growth
+  earliest: 13
+  duration: 1
+  standing: true
+  underway: false
+  predecessors:
+  - id: launch
+  demands:
+  - seat: eng
+    fte: 0.3
+    basis: A
+- id: enterprise
+  lane: product
+  label: Enterprise tier
+  circle: growth
+  earliest: 14
+  duration: 6
+  standing: false
+  underway: false
+  predecessors:
+  - id: launch
+  demands:
+  - seat: eng
+    fte: 0.8
+    basis: A
+  - seat: sales
+    fte: 0.3
+    basis: A
+- id: partners
+  lane: go-to-market
+  label: Partner channel
+  circle: growth
+  earliest: 16
+  duration: 6
+  standing: false
+  underway: false
+  predecessors:
+  - id: launch
+  demands:
+  - seat: sales
+    fte: 0.7
+    basis: A
+- id: mobile
+  lane: product
+  label: Mobile app
+  circle: later
+  earliest: 20
+  duration: 8
+  standing: false
+  underway: false
+  predecessors:
+  - id: enterprise
+  demands:
+  - seat: eng
+    fte: 1.0
+    basis: A
+  - seat: design
+    fte: 0.5
+    basis: A
+streams:
+- id: subscriptions
+  label: Subscriptions
+  unlockedBy: launch
+  unit: subscriber-months
+  price:
+    usd: 40
+    basis: A
+    note: list price
+  volumeByYear:
+    units:
+    - 3000
+    - 12000
+    - 30000
+    basis: A
+    note: illustrative
+  rampMonths: 6
+- id: services
+  label: Onboarding services
+  unlockedBy: beta
+  unit: engagements
+  price:
+    usd: 6000
+    basis: A
+    note: per engagement
+  volumeByYear:
+    units:
+    - 4
+    - 10
+    - 12
+    basis: A
+    note: illustrative
+  rampMonths: 3
+- id: enterprise-contracts
+  label: Enterprise contracts
+  unlockedBy: enterprise
+  unit: contract-years
+  price:
+    usd: 48000
+    basis: A
+    note: per contract-year
+  volumeByYear:
+    units:
+    - 2
+    - 6
+    - 12
+    basis: A
+    note: illustrative
+  rampMonths: 4
+funding:
+- id: seed
+  label: Seed round
+  byMonth:
+  - 300000
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 300000
+  basis: M
+  note: two tranches, closed
+  counted: true
+- id: grant
+  label: Innovation grant
+  byMonth:
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 0
+  - 250000
+  basis: A
+  note: applied, not awarded
+  counted: false
+nonLabor:
+- id: tools
+  label: Tools and hosting
+  byYear:
+  - 24000
+  - 36000
+  - 48000
+  basis: A
+  note: assumed
+- id: ops
+  label: Office, insurance, accounting
+  byYear:
+  - 30000
+  - 40000
+  - 50000
+  basis: A
+  note: assumed
+scenarios:
+- id: as-planned
+  name: As planned
+  gist: Dependencies and hire dates bind; capacity is reported, not enforced.
+  level: false
+- id: leveled
+  name: Capacity-leveled
+  gist: A seat cannot carry more than it has; overloaded work slides later in priority order.
+  level: true
+- id: eng-late
+  name: Engineer four months late
+  gist: The first engineer lands in month 6 instead of month 2; the founder carries the prototype meanwhile.
+  level: true
+  hireDelay:
+    eng: 4
+- id: no-grant
+  name: Grant not awarded, half the volume
+  gist: 'The lower bound: only the seed counts and every stream runs at half the assumed volume.'
+  level: true
+  countFunding:
+    grant: false
+  volumeScale: 0.5
+- id: grant-and-upside
+  name: Grant awarded, 1.5× volume
+  gist: The upper bound.
+  level: true
+  countFunding:
+    grant: true
+  volumeScale: 1.5

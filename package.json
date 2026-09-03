@@ -1,0 +1,42 @@
+{
+  "name": "plangraph",
+  "version": "0.1.0",
+  "description": "Planning as a computation graph: work items with dependencies, seats with hire dates and fallbacks, revenue keyed to unlocks, scenarios, and a harness that says where the plan does not make sense.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheAxiomFoundation/plangraph"
+  },
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "plangraph": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "bunx vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "bun src/cli.ts check examples/studio.yaml",
+    "watch": "bun --watch src/cli.ts check examples/studio.yaml"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "dependencies": {
+    "yaml": "^2.6.1"
+  }
+}
