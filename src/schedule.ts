@@ -232,6 +232,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
         // The one exception: an item OWNED by a leadership seat that is not yet hired waits for
         // the hire; a contribution from an unhired leadership seat is unstaffed, not blocking.
         if (unlevelled.has(carrier) && ((load?.capacity[m] ?? 0) > 0 || carrier !== ownerOf(i))) continue;
+        if (plan.levelOn === "owner" && carrier !== ownerOf(i)) continue; // contributors are reported, not waited for
         const short = load ? load.demand[m] + demand.fte - load.capacity[m] : demand.fte;
         const earlier =
           worst !== null &&

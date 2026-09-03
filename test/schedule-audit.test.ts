@@ -556,4 +556,15 @@ describe("demand profiles", () => {
     expect(scheduled(plan, "b").start).toBe(0);
     expect(scheduled(plan, "a").start).toBe(2);
   });
+
+  it("levelOn owner: a contributor's full seat does not hold the item; the owner's does", () => {
+    const seats = [role("x"), role("y", { hireMonths: [6] })];
+    const items = [work("a", { duration: 2, demands: [{ seat: "x", fte: 1, basis: "A" }, { seat: "y", fte: 0.1, basis: "A" }] })];
+    const all = fixture({ calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 }, seats, items });
+    expect(scheduled(all, "a", LEVELED).start).toBe(6);
+    const owner = fixture({ ...all, levelOn: "owner" });
+    expect(scheduled(owner, "a", LEVELED).start).toBe(0);
+    const ownerLate = fixture({ ...all, levelOn: "owner", seats: [role("x", { hireMonths: [3] }), role("y")] });
+    expect(scheduled(ownerLate, "a", LEVELED).start).toBe(3);
+  });
 });

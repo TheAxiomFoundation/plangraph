@@ -238,6 +238,12 @@ export interface Scenario {
 }
 
 export interface Plan {
+  /**
+   * What leveling binds on. "all" (default): every seat an item demands must have room, so a
+   * 0.1 contribution from an unhired seat holds the item. "owner": only the owner's seat binds;
+   * contributor overloads are reported (W101), never scheduled around.
+   */
+  levelOn?: "all" | "owner";
   name: string;
   calendar: Calendar;
   /** Circles in booking priority: the first books capacity first when leveling. Every item's circle must be listed. */

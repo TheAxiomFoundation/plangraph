@@ -59,6 +59,8 @@ export function parsePlan(input: unknown): Plan {
   const p = input;
 
   requiredString(p.name, "plan.name", true);
+
+  if (p.levelOn !== undefined) need(p.levelOn === "all" || p.levelOn === "owner", "plan.levelOn", 'must be "all" or "owner"');
   need(isObj(p.calendar), "plan.calendar", "must be an object");
   let horizon: number | undefined;
   if (isObj(p.calendar)) {
