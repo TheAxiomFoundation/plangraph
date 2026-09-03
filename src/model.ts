@@ -65,6 +65,11 @@ export interface SeatDef {
    * Fallback is all-or-nothing per role: once one seat is hired, all demand stays on the role.
    */
   fallback: SeatId | "external" | null;
+  /**
+   * A leadership seat: leveling never waits for room on it, because principals absorb
+   * rather than slip; the overload is reported instead. Off by default.
+   */
+  unlevelled?: boolean;
 }
 
 export interface Demand {
