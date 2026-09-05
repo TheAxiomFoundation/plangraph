@@ -21,6 +21,7 @@ export function project(portfolio: Portfolio, scenarioId: string, asOfMonth: num
   const resourceMonths: ResourceMonth[] = [];
   const bookingTotals = new Map<string, Map<number, { actual: number; fixed: number; forecast: number; sources: string[] }>>();
   for (const booking of scheduled.bookings) {
+    if (booking.resourceId === null) continue;
     if (!bookingTotals.has(booking.resourceId)) bookingTotals.set(booking.resourceId, new Map());
     const months = bookingTotals.get(booking.resourceId)!;
     if (!months.has(booking.month)) months.set(booking.month, { actual: 0, fixed: 0, forecast: 0, sources: [] });

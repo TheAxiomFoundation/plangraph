@@ -30,4 +30,15 @@ describe('portable projection reports', () => {
     expect(csvCell(null)).toBe('""');
     expect(() => projectionCsv(project(input(), 'baseline', 0), 'missing')).toThrow('Unknown projection table');
   });
+  it('exports unstaffed fixed demand without attributing it to the planned person', () => {
+    const model = input();
+    model.work.find(work => work.id === 'operations')!.demands[0].eligibleResourceIds = ['taylor'];
+    const p = project(model, 'baseline', 0), tables = projectionTables(p);
+    const bookings = tables.find(table => table.name === 'Bookings')!;
+    const unassigned = bookings.rows.filter(row => row[2] === 'Unassigned demand');
+    expect(unassigned.map(row => [row[3],row[4],row[5]])).toEqual([['2026-01',.25,.25],['2026-02',.25,.25]]);
+    expect(projectionCsv(p,'Bookings')).toContain('"Unassigned demand"');
+    expect(p.resourceMonths.find(row => row.resourceId === 'taylor' && row.month === 0)?.bookedFte).toBe(0);
+    expect(tables.find(table => table.name === 'Projection')!.rows.some(row => row[0] === 'Fingerprint definition' && String(row[1]).includes('not a digest of output bytes'))).toBe(true);
+  });
 });

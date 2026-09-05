@@ -12,12 +12,14 @@ const item = (p: ReturnType<typeof project>, id: string) => p.work.find(work => 
 const reverseCollections = (value: unknown, key = ''): unknown => Array.isArray(value) ? (key === 'profile' ? value : [...value].reverse()).map(child => reverseCollections(child)) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([name, child]) => [name, reverseCollections(child, name)])) : value;
 
 describe('portfolio monthly scheduling', () => {
-  it('reserves fixed work before a higher-priority contiguous duration, and exposes overload', () => {
+  it('reserves fixed work before movable duration and retains unmet demand without inventing overload', () => {
     const input = portfolio({ work: [work('delivery', { priority: -100, durationMonths: 2 }), work('standing', { mode: 'fixed', fixedStartMonth: 1, durationMonths: 2 }), work('extra', { mode: 'fixed', fixedStartMonth: 1, demands: [demand('d', ['r'], .25)] })] });
     const result = project(input, 'base', 0);
     expect([item(result, 'delivery').startMonth, item(result, 'delivery').completionMonth]).toEqual([3, 5]);
-    expect(result.resourceMonths.find(row => row.month === 1)?.bookedFte).toBe(1.25);
-    expect(result.findings.some(row => row.code === 'fixed-overload' && row.month === 1)).toBe(true);
+    expect(result.resourceMonths.find(row => row.month === 1)?.bookedFte).toBe(1);
+    expect(result.bookings.filter(row => row.month === 1 && row.resourceId === null)).toMatchObject([{ kind:'fixed',fte:.25,shortfallFte:.25 }]);
+    expect(result.findings.some(row => row.code === 'fixed-shortage' && row.month === 1)).toBe(true);
+    expect(result.findings.some(row => row.code === 'fixed-overload')).toBe(false);
     expect(project(reverseCollections(input) as Portfolio, 'base', 0)).toEqual(result);
   });
   it('assigns restricted demands first, splits capacity by stable resource ID, and is order-independent', () => {
@@ -128,10 +130,35 @@ describe('portfolio actuals, scenarios and source gaps', () => {
   it('retains fixed shortages as commitments while withholding infeasible completion from successors', () => {
     const input = portfolio({resources:[resource('r',{employment:'planned'})],work:[work('fixed',{mode:'fixed',fixedStartMonth:1}),work('next',{dependencies:[{workId:'fixed'}]})],scenarios:[{id:'base',label:'Removed',resources:[{resourceId:'r',remove:true}]}]});
     const result = project(input,'base',0);
-    expect(item(result,'fixed').bookings).toMatchObject([{kind:'fixed',fte:1,shortfallFte:1}]);
+    expect(item(result,'fixed').bookings).toMatchObject([{kind:'fixed',resourceId:null,fte:1,shortfallFte:1}]);
     expect(item(result,'fixed').status).toBe('unresolved'); expect(item(result,'fixed').completionMonth).toBeNull();
     expect(item(result,'next').status).toBe('unresolved'); expect(item(result,'next').bookings).toHaveLength(0);
     expect(item(result,'fixed').blockers.some(row=>row.message.includes('r (removed)'))).toBe(true);
+  });
+  it('keeps a pooled window unresolved when only its first month is short, without naming an unhired carrier', () => {
+    const ids = ['a-unhired','z-existing'];
+    const input = portfolio({resources:[resource('a-unhired',{employment:'planned',startMonth:1}),resource('z-existing')],work:[work('fixed',{mode:'fixed',fixedStartMonth:0,durationMonths:3,demands:[demand('pool',ids,2)]}),work('next',{dependencies:[{workId:'fixed'}],demands:[demand('pool',ids,1)]})]});
+    const result = project(input,'base',0), fixed = item(result,'fixed');
+    expect(fixed.bookings.filter(row=>row.resourceId===null)).toEqual([expect.objectContaining({month:0,demandId:'pool',kind:'fixed',fte:1,shortfallFte:1})]);
+    expect(fixed.bookings.filter(row=>row.resourceId!==null).map(row=>[row.month,row.resourceId,row.fte])).toEqual([[0,'z-existing',1],[1,'a-unhired',1],[1,'z-existing',1],[2,'a-unhired',1],[2,'z-existing',1]]);
+    expect(fixed.allocatedEffortFteMonths).toBe(6);
+    expect(fixed.status).toBe('unresolved'); expect(fixed.completionMonth).toBeNull();
+    expect(item(result,'next').status).toBe('unresolved'); expect(item(result,'next').bookings).toHaveLength(0);
+    expect(result.resourceMonths.find(row=>row.resourceId==='a-unhired'&&row.month===0)).toMatchObject({employed:false,capacityFte:0,bookedFte:0});
+    expect(result.resourceMonths.every(row=>row.bookedFte<=row.capacityFte)).toBe(true);
+    expect(result.findings.filter(row=>row.code==='fixed-shortage').map(row=>row.month)).toEqual([0]);
+    expect(result.findings.some(row=>row.code==='fixed-overload')).toBe(false);
+    expect(project(reverseCollections(input) as Portfolio,'base',0)).toEqual(result);
+  });
+  it('requires a named resource for actual bookings and retains evidenced actual overload separately', () => {
+    const input = portfolio({work:[work('observed',{actuals:{bookings:[{resourceId:'r',month:0,fte:1.25,sourceIds}],sourceIds}})]});
+    const result = project(input,'base',1);
+    expect(result.bookings.filter(row=>row.kind==='actual')).toMatchObject([{resourceId:'r',fte:1.25}]);
+    expect(result.resourceMonths.find(row=>row.month===0)?.actualFte).toBe(1.25);
+    expect(result.findings.some(row=>row.code==='fixed-overload'&&row.resourceId==='r'&&row.month===0)).toBe(true);
+    const invalid = structuredClone(input) as unknown as { work: { actuals: { bookings: { resourceId: string | null }[] } }[] };
+    invalid.work[0].actuals.bookings[0].resourceId = null;
+    expect(validatePortfolio(invalid).some(issue=>issue.path.endsWith('.resourceId'))).toBe(true);
   });
   it('rejects historical employment edits, retains stale hire provenance, and permits editing unconfirmed hires', () => {
     const input = portfolio({ resources:[resource('r'),resource('hire',{employment:'planned',startMonth:1}),resource('exited',{startMonth:0,endMonth:1})], scenarios:[{id:'base',label:'Base'},{id:'later',label:'Later',resources:[{resourceId:'hire',startMonth:4}]},{id:'illegal',label:'Illegal',resources:[{resourceId:'r',remove:true}]},{id:'exit',label:'Exit',resources:[{resourceId:'exited',startMonth:4}]}] });
@@ -208,6 +235,11 @@ describe('portfolio validation and portable identity', () => {
     let expected = 0xcbf29ce484222325n;
     for (let i=0;i<text.length;i++) for (const byte of [text.charCodeAt(i)&255,text.charCodeAt(i)>>>8]) expected = BigInt.asUintN(64,(expected^BigInt(byte))*0x100000001b3n);
     expect(contentFingerprint(value)).toBe(`fnv1a64-utf16:${expected.toString(16).padStart(16,'0')}`);
+  });
+  it('includes the versioned projection behavior in its canonical input identity', () => {
+    const input = portfolio(), result = project(input,'base',0);
+    expect(result.algorithmVersion).toBe('monthly-greedy/2');
+    expect(result.fingerprint).not.toBe(contentFingerprint({portfolio:input,scenarioId:'base',asOfMonth:0,algorithmVersion:'monthly-greedy/1'}));
   });
   it('preserves every ordered source metadata array and fingerprints changes in its order', () => {
     const metadata = { byMonth:[20,10,30], stages:[{name:'second',values:[5,2]},{name:'first',values:[3,1]}] };

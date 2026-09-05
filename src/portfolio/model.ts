@@ -1,7 +1,8 @@
 /** Monthly intervals are [startMonth,endMonth); amounts are safe integer USD cents. */
 export const PORTFOLIO_SCHEMA = 'plangraph-portfolio/v1' as const;
 export const PROJECTION_SCHEMA = 'plangraph-projection/v1' as const;
-export const ALGORITHM_VERSION = 'monthly-greedy/1' as const;
+/** Bump for any behavior/output change; fingerprints identify canonical inputs plus this version. */
+export const ALGORITHM_VERSION = 'monthly-greedy/2' as const;
 export interface Source { id: string; label: string; url?: string; basis?: string; note?: string }
 export interface Program { id: string; label: string; financialCompleteness: 'complete' | 'partial' | 'unknown'; note?: string }
 export interface CapacityEvent { fromMonth: number; capacityFte: number; sourceIds: string[] }
@@ -70,13 +71,17 @@ export interface Blocker {
   code: 'source-gap' | 'dependency' | 'capacity' | 'actuals' | 'horizon' | 'earliest' | 'fixed';
   message: string; workIds?: string[]; resourceIds?: string[]; months?: number[]; sourceIds: string[];
 }
-export interface Booking {
-  workId: string; demandId: string; resourceId: string; month: number; fte: number;
-  /** Fixed bookings retain requested commitments, including explicit capacity shortfalls. */
-  kind: 'actual' | 'fixed' | 'forecast'; sourceIds: string[]; components: DemandComponent[];
-  /** Portion of this fixed commitment that has no available productive capacity. Never actual work. */
-  shortfallFte?: number;
+interface BookingBase {
+  workId: string; demandId: string; month: number; fte: number;
+  sourceIds: string[]; components: DemandComponent[];
 }
+/** Unstaffed fixed demand is retained without assigning it to an arbitrary eligible person. */
+export type Booking = BookingBase & (
+  | { kind: 'actual' | 'forecast'; resourceId: string; shortfallFte?: never }
+  | { kind: 'fixed'; resourceId: string; shortfallFte?: never }
+  /** No available carrier. This request consumes no person's capacity and is never actual work. */
+  | { kind: 'fixed'; resourceId: null; shortfallFte: number }
+);
 export interface WorkProjection {
   id: string; label: string; programId: string; mode: Work['mode'];
   status: 'actual-complete' | 'scheduled' | 'partial' | 'ongoing' | 'unresolved' | 'unscheduled' | 'excluded';

@@ -39,10 +39,17 @@ failure to find a window is not proof that no feasible assignment exists.
 FTE-months between explicit minimum and maximum staffing, with a smaller final remainder
 allowed. `ongoing` work has no completion and must fit the whole remaining horizon when
 movable. Dependencies explicitly use start or finish. `fixed` work and fixed ongoing
-commitments retain their reservations, including `shortfallFte` when capacity is missing;
-an infeasible planned fixed window has no successful forecast boundary. A `milestone`
+commitments retain their reservations. Missing capacity is recorded as a demand-level
+booking with `resourceId: null` and `shortfallFte`, without consuming a person's capacity
+or naming an unavailable hire as the carrier. Actual and forecast allocations always
+name a real resource. An infeasible planned fixed window has no successful forecast
+boundary, even if only one month is short and later months are staffed. A `milestone`
 has zero effort and requires dependency or actual evidence. Source gaps propagate to
 dependents without turning a target date into completion evidence.
+
+Competing fixed reservations consume available capacity in canonical work-ID order,
+before movable work. Movable priorities do not reorder fixed commitments; changing this
+policy would be an explicit algorithm change. Shortfalls remain attached to their demand.
 
 As-of is an exclusive history boundary: actual bookings and starts precede it, while
 actual completion may equal it. Forecast work begins no earlier than as-of. Past planned
@@ -60,8 +67,14 @@ reported. Cash is `null` without an explicit opening balance and known receipt a
 JSON, CSV and browser consumers share the same `Projection`; `projectionTables` provides
 typed report rows for work, people, bookings, assumptions, economics, funding and sources.
 The CLI waits for stdout to flush. Reports include scenario, as-of, source revision,
-algorithm version and deterministic content fingerprint. The FNV-1a64 fingerprint is an
-identity aid, not a cryptographic signature. Monetary report cells display dollars; JSON
+algorithm version and deterministic content fingerprint. The FNV-1a64 fingerprint
+identifies the canonical input portfolio, scenario ID, as-of month and algorithm version;
+it is not a digest of serialized output or a cryptographic signature. Metadata arrays and
+monthly profiles retain their semantic order. Any change that can alter projection
+behavior, output meaning, deterministic ordering or arithmetic must increment
+`ALGORITHM_VERSION`; a refactor proven to preserve output does not require an increment.
+The `monthly-greedy/2` version moves unstaffed fixed commitments off arbitrary people and
+onto demand-level records. Monetary report cells display dollars; JSON
 retains cents. No UI, filesystem, organization-specific compensation or grant compiler
 is imported by the portfolio kernel.
 

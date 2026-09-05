@@ -4,7 +4,8 @@ import { capacity } from './resolve.js';
 
 const EPS = 1e-8;
 const valueAt = (value: number, profile: number[] | undefined, offset: number) => profile ? profile[Math.min(Math.max(offset, 0), profile.length - 1)] : value;
-const bookingOrder = (a: Booking, b: Booking) => a.month - b.month || compareText(a.resourceId, b.resourceId) || compareText(a.workId, b.workId) || compareText(a.demandId, b.demandId) || compareText(a.kind, b.kind);
+const bookingResourceOrder = (a: Booking, b: Booking) => a.resourceId === b.resourceId ? 0 : a.resourceId === null ? 1 : b.resourceId === null ? -1 : compareText(a.resourceId, b.resourceId);
+const bookingOrder = (a: Booking, b: Booking) => a.month - b.month || bookingResourceOrder(a, b) || compareText(a.workId, b.workId) || compareText(a.demandId, b.demandId) || compareText(a.kind, b.kind);
 interface Attempt { bookings: Booking[]; blockers: Blocker[]; ok: boolean }
 export interface ScheduleResult { work: WorkProjection[]; bookings: Booking[]; findings: Finding[] }
 
@@ -16,7 +17,7 @@ export function schedule(workItems: Work[], resources: ResourceProjection[], hor
   const commit = (bookings: Booking[]) => {
     for (const booking of bookings) {
       if (booking.month < 0 || booking.month >= horizon) continue;
-      used.get(booking.resourceId)![booking.month] = roundedFte(used.get(booking.resourceId)![booking.month] + booking.fte);
+      if (booking.resourceId !== null) used.get(booking.resourceId)![booking.month] = roundedFte(used.get(booking.resourceId)![booking.month] + booking.fte);
       allBookings.push(booking);
     }
   };
@@ -28,18 +29,19 @@ export function schedule(workItems: Work[], resources: ResourceProjection[], hor
     for (const demand of rankedDemands(work)) {
       const ids = eligible(demand), required = roundedFte(valueAt(demand.fte, demand.profile, month - start) * scale);
       let remaining = required;
-      const add = (resourceId: string, amount: number, shortfall = false) => {
+      const add = (resourceId: string | null, amount: number) => {
         if (amount <= EPS) return;
-        bookings.push({ workId: work.id, demandId: demand.id, resourceId, month, fte: roundedFte(amount), kind, ...(shortfall ? { shortfallFte: roundedFte(amount) } : {}), sourceIds: unique([...work.sourceIds, ...demand.sourceIds, ...demand.components.flatMap(component => component.sourceIds)]), components: demand.components.map(component => ({ ...component, fte: roundedFte(valueAt(component.fte, component.profile, month - start) * scale * amount / required), profile: undefined })) });
-        free.set(resourceId, Math.max(0, (free.get(resourceId) ?? 0) - amount));
+        const row = { workId: work.id, demandId: demand.id, month, fte: roundedFte(amount), sourceIds: unique([...work.sourceIds, ...demand.sourceIds, ...demand.components.flatMap(component => component.sourceIds)]), components: demand.components.map(component => ({ ...component, fte: roundedFte(valueAt(component.fte, component.profile, month - start) * scale * amount / required), profile: undefined })) };
+        bookings.push(resourceId === null ? { ...row, kind: 'fixed', resourceId: null, shortfallFte: roundedFte(amount) } : { ...row, resourceId, kind });
+        if (resourceId !== null) free.set(resourceId, Math.max(0, (free.get(resourceId) ?? 0) - amount));
         remaining = roundedFte(remaining - amount);
       };
       for (const id of ids) { add(id, Math.min(remaining, free.get(id)!)); if (remaining <= EPS) break; }
       if (remaining > EPS) {
         const detail = ids.map(id => { const resource = resourceById.get(id)!; return `${id} (${resource.removed ? 'removed' : month < resource.effectiveStartMonth ? `not employed until ${resource.effectiveStartMonth}` : month >= (resource.endMonth ?? Infinity) ? `exited at ${resource.endMonth}` : `${roundedFte(free.get(id)!)} FTE available`})`; }).join(', ');
         blockers.push({ code: 'capacity', message: `${work.label}: ${demand.id} is short ${remaining} FTE in month ${month}; the greedy assignment exhausted eligible capacity: ${detail || 'no resource meets the declared eligibility/skills'}.`, resourceIds: ids.length ? ids : [...demand.eligibleResourceIds].sort(), months: [month], sourceIds: unique([...work.sourceIds, ...demand.sourceIds]) });
-        // A retained commitment can exceed capacity, but its shortage remains explicit.
-        if (force && ids.length) add(ids[0], remaining, true);
+        // Retain the demand-level shortage without inventing an available or overloaded carrier.
+        if (force) add(null, remaining);
       }
     }
     return { bookings, blockers, ok: blockers.length === 0 };
@@ -70,7 +72,8 @@ export function schedule(workItems: Work[], resources: ResourceProjection[], hor
     for (const next of successors.get(work.id) ?? []) { const count = gapDegree.get(next)! - 1; gapDegree.set(next, count); if (count === 0) gapReady.push(next); }
   }
   const pinned = new Set<string>();
-  // Reserve every future fixed window before serially placing movable work.
+  // Reserve every future fixed window before movable work. Competing fixed reservations
+  // retain canonical work-ID order; movable priority does not reorder these commitments.
   for (const work of workItems) {
     const row = rows.get(work.id)!;
     if (work.enabled === false || row.actualCompletionMonth !== null || row.sourceGapIds.length) continue;
