@@ -140,7 +140,9 @@ function check(): 0 | 1 | 2 {
   return r.errors ? 1 : 0;
 }
 
-if (cmd === "check") process.exit(check());
+if (cmd === "check") process.exitCode = check();
+
+if (cmd === "watch") {
 
 // watch: one check now, then one after every save of the plan file. Watching the directory
 // catches editors that save by renaming; a short debounce folds the write bursts they make.
@@ -158,3 +160,5 @@ console.log(`\nwatching ${target} · re-runs on every save · Ctrl-C to stop`);
 watchDir(dirname(target), (_event, name) => {
   if (!name || name.toString() === basename(target)) rerun();
 });
+
+}

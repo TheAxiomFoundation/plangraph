@@ -1,5 +1,72 @@
 # plangraph
 
+## Portfolio projection API
+
+Version 0.2 adds `plangraph/portfolio`: a serializable, deterministic monthly model
+for shared people, execution demands, actual evidence, scenarios and exact-cent costs.
+The original root API and CLI remain available for existing consumers; their behavior
+is described under **Legacy plan API** below.
+
+```ts
+import { parsePortfolioText, project, projectionTables } from 'plangraph/portfolio';
+const portfolio = parsePortfolioText(jsonOrYamlText);
+const projection = project(portfolio, 'baseline', 0);
+const workRows = projectionTables(projection).find(table => table.name === 'Work');
+```
+
+```sh
+# Installed package: plain Node, with an explicit scenario and as-of date.
+plangraph-portfolio examples/portfolio.json --scenario baseline --as-of 2026-01
+plangraph-portfolio examples/portfolio.json --scenario hire-late --as-of 0 --format csv --table Work
+# From a checkout:
+bun src/portfolio-cli.ts examples/portfolio.json --scenario baseline --as-of 0
+```
+
+The [generic input example](examples/portfolio.json) demonstrates a shared person,
+part-time operating work, a future hire, dependent delivery, restricted proposed coverage
+and unknown cash. The exported [TypeScript contract](src/portfolio/model.ts) defines
+`plangraph-portfolio/v1` inputs and `plangraph-projection/v1` outputs. `validatePortfolio`
+returns issues with paths; `project` also validates as-of-specific evidence.
+
+People have stable IDs, dated employment, productive capacity and monthly cost events.
+Pools group people and never create capacity. Compose all programs before projection;
+filter the resulting work, bookings and ledgers for display. The scheduler orders ready
+work by explicit priority and ID. It allocates restricted demands first, then demand ID,
+using eligible resource ID first-fit. This is a deterministic heuristic, not an optimizer:
+failure to find a window is not proof that no feasible assignment exists.
+
+`duration` requires an uninterrupted feasible window; `effort` consumes remaining
+FTE-months between explicit minimum and maximum staffing, with a smaller final remainder
+allowed. `ongoing` work has no completion and must fit the whole remaining horizon when
+movable. Dependencies explicitly use start or finish. `fixed` work and fixed ongoing
+commitments retain their reservations, including `shortfallFte` when capacity is missing;
+an infeasible planned fixed window has no successful forecast boundary. A `milestone`
+has zero effort and requires dependency or actual evidence. Source gaps propagate to
+dependents without turning a target date into completion evidence.
+
+As-of is an exclusive history boundary: actual bookings and starts precede it, while
+actual completion may equal it. Forecast work begins no earlier than as-of. Past planned
+hires remain planned until employment evidence changes; stale hire forecasts clamp to
+as-of and raise a finding. Scenarios cannot move or remove an existing/exited employee.
+Actual effort must reconcile to total effort minus evidenced bookings. Dates, original
+targets, actuals, remaining effort, blockers and provenance remain separately inspectable.
+
+Financial events use safe integer cents. Exact rational shares and fixed-total monthly
+distributions use half-up rounding. Payroll follows active employment independently of
+work allocation. Expenses, proposed/committed cost coverage, commitments, receipts and
+quotes are separate types. Coverage is scoped and capped at eligible expense; excess is
+reported. Cash is `null` without an explicit opening balance and known receipt assumptions.
+
+JSON, CSV and browser consumers share the same `Projection`; `projectionTables` provides
+typed report rows for work, people, bookings, assumptions, economics, funding and sources.
+The CLI waits for stdout to flush. Reports include scenario, as-of, source revision,
+algorithm version and deterministic content fingerprint. The FNV-1a64 fingerprint is an
+identity aid, not a cryptographic signature. Monetary report cells display dollars; JSON
+retains cents. No UI, filesystem, organization-specific compensation or grant compiler
+is imported by the portfolio kernel.
+
+## Legacy plan API
+
 Planning as a computation graph. A plan is a directed acyclic graph of work items over a
 monthly calendar: items demand seats, seats exist from a hire month and cost money whether
 or not they are busy, items depend on other items, finishing an item can unlock a revenue

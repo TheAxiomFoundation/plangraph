@@ -1,6 +1,6 @@
 {
   "name": "plangraph",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Planning as a computation graph: work items with dependencies, seats with hire dates and fallbacks, revenue keyed to unlocks, scenarios, and a harness that says where the plan does not make sense.",
   "license": "Apache-2.0",
   "repository": {
@@ -18,10 +18,15 @@
     "./node": {
       "types": "./dist/node.d.ts",
       "import": "./dist/node.js"
+    },
+    "./portfolio": {
+      "types": "./dist/portfolio/index.d.ts",
+      "import": "./dist/portfolio/index.js"
     }
   },
   "bin": {
-    "plangraph": "./dist/cli.js"
+    "plangraph": "./dist/cli.js",
+    "plangraph-portfolio": "./dist/portfolio-cli.js"
   },
   "files": [
     "dist",

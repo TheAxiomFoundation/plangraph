@@ -83,8 +83,10 @@ describe("packed package", () => {
         [
           'import { report } from "plangraph";',
           'import { loadPlanFile } from "plangraph/node";',
+          'import { project, parsePortfolioText, projectionTables } from "plangraph/portfolio";',
           'if (typeof report !== "function") throw new Error("report export did not resolve");',
           'if (typeof loadPlanFile !== "function") throw new Error("plangraph/node export did not resolve");',
+          'if ([project, parsePortfolioText, projectionTables].some(x => typeof x !== "function")) throw new Error("portfolio exports did not resolve");',
           'console.log(typeof report);',
         ].join("\n"),
       );
@@ -96,6 +98,10 @@ describe("packed package", () => {
         join(consumer, "types.ts"),
         [
           'import { report, type Plan, type Report } from "plangraph";',
+          'import { project, type Portfolio, type Projection } from "plangraph/portfolio";',
+          'declare const portfolio: Portfolio;',
+          'const projection: Projection = project(portfolio, "baseline", 0);',
+          'void projection;',
           "declare const plan: Plan;",
           "const result: Report = report(plan);",
           "void result;",
@@ -129,6 +135,11 @@ describe("packed package", () => {
       );
       expectSuccess("installed plangraph CLI", checked);
       expect(checked.stdout).toContain("✓ no errors");
+      const portfolio = run('npx', ['--no-install', 'plangraph-portfolio', 'node_modules/plangraph/examples/portfolio.json', '--scenario', 'baseline', '--as-of', '2026-01'], consumer, env);
+      expectSuccess('installed portfolio CLI', portfolio);
+      const result = JSON.parse(portfolio.stdout);
+      expect(result.work.find((work: { id: string }) => work.id === 'build').completionMonth).toBe(4);
+      expect(result.months.every((month: { closingCashCents: number | null }) => month.closingCashCents === null)).toBe(true);
     } finally {
       rmSync(temporary, { recursive: true, force: true });
     }

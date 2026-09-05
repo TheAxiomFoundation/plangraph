@@ -85,7 +85,7 @@ export function parsePlan(input: unknown): Plan {
 
   need(isObj(p.escalation), "plan.escalation", "must be an object");
   if (isObj(p.escalation)) {
-    need(finite(p.escalation.rate), "plan.escalation.rate", "must be a finite number");
+    need(finite(p.escalation.rate) && p.escalation.rate >= -1, "plan.escalation.rate", "must be finite and at least -1");
     basis(p.escalation.basis, "plan.escalation.basis");
   }
 

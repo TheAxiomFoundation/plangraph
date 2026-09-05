@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "plangraph-portfolio/v1",
+  "id": "shared-studio",
+  "label": "Shared studio",
+  "sourceRevision": "example-v1",
+  "calendar": { "startMonth": "2026-01", "horizonMonths": 6 },
+  "sources": [{ "id": "assumptions", "label": "Illustrative planning assumptions", "basis": "assumed", "note": "Demonstration fixture, not an institutional budget." }],
+  "programs": [{ "id": "tools", "label": "Tools", "financialCompleteness": "partial" }, { "id": "research", "label": "Research", "financialCompleteness": "partial" }],
+  "resources": [
+    { "id": "alex", "label": "Alex", "programId": "tools", "employment": "existing", "startMonth": 0, "capacityFte": 1, "costEvents": [{ "fromMonth": 0, "monthlyCents": 100000, "sourceIds": ["assumptions"] }], "sourceIds": ["assumptions"] },
+    { "id": "taylor", "label": "Planned hire", "programId": "research", "employment": "planned", "startMonth": 2, "capacityFte": 1, "costEvents": [{ "fromMonth": 0, "monthlyCents": 100000, "sourceIds": ["assumptions"] }], "sourceIds": ["assumptions"] }
+  ],
+  "pools": [{ "id": "builders", "label": "Shared builders", "resourceIds": ["alex", "taylor"], "sourceIds": ["assumptions"] }],
+  "work": [
+    { "id": "operations", "label": "Fixed operations commitment", "programId": "tools", "mode": "ongoing", "fixed": true, "fixedStartMonth": 0, "earliestStartMonth": 0, "dependencies": [], "priority": 0, "demands": [{ "id": "operations", "eligibleResourceIds": ["alex"], "fte": 0.25, "components": [{ "id": "support", "fte": 0.25, "basis": "assumed", "sourceIds": ["assumptions"] }], "sourceIds": ["assumptions"] }], "sourceIds": ["assumptions"] },
+    { "id": "build", "label": "Build a shared service", "programId": "research", "mode": "duration", "earliestStartMonth": 0, "durationMonths": 2, "targetFinishMonth": 3, "dependencies": [], "priority": 100, "demands": [{ "id": "build", "eligibleResourceIds": ["alex", "taylor"], "fte": 1, "components": [{ "id": "implementation", "fte": 1, "basis": "assumed", "sourceIds": ["assumptions"] }], "sourceIds": ["assumptions"] }], "sourceIds": ["assumptions"] },
+    { "id": "launch", "label": "Service available", "programId": "tools", "mode": "milestone", "earliestStartMonth": 0, "targetFinishMonth": 3, "dependencies": [{ "workId": "build" }], "priority": 100, "demands": [], "sourceIds": ["assumptions"] }
+  ],
+  "costs": [],
+  "funding": [{ "id": "proposal", "label": "Proposed support for Alex", "kind": "coverage", "status": "proposed", "startMonth": 0, "endMonth": 6, "targetResourceIds": ["alex"], "share": "0.5", "sourceIds": ["assumptions"] }],
+  "scenarios": [{ "id": "baseline", "label": "Baseline" }, { "id": "hire-late", "label": "Hire two months later", "resources": [{ "resourceId": "taylor", "startMonth": 4 }] }]
+}
