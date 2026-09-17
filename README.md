@@ -89,4 +89,4 @@ demand is per month). Resource pools shared across plans. Cost of capital. A dra
 
 ## License
 
-Apache-2.0. Built at [The Axiom Foundation](https://axiom.org).
+MIT. Built at [The Axiom Foundation](https://axiom.org).

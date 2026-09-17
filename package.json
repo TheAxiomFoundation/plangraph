@@ -2,7 +2,7 @@
   "name": "plangraph",
   "version": "0.1.0",
   "description": "Planning as a computation graph: work items with dependencies, seats with hire dates and fallbacks, revenue keyed to unlocks, scenarios, and a harness that says where the plan does not make sense.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/TheAxiomFoundation/plangraph"
