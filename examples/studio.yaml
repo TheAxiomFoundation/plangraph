@@ -53,6 +53,7 @@ items:
   lane: product
   label: Prototype
   circle: launch
+  owner: eng
   earliest: 0
   duration: 4
   standing: false
@@ -69,6 +70,7 @@ items:
   lane: product
   label: Design system
   circle: launch
+  owner: design
   earliest: 3
   duration: 4
   standing: false
@@ -82,6 +84,7 @@ items:
   lane: product
   label: Private beta
   circle: launch
+  owner: eng
   earliest: 4
   duration: 5
   standing: false
@@ -103,6 +106,7 @@ items:
   lane: product
   label: Self-serve onboarding
   circle: launch
+  owner: eng
   earliest: 8
   duration: 3
   standing: false
@@ -121,6 +125,7 @@ items:
   lane: go-to-market
   label: Public launch
   circle: launch
+  owner: founder
   earliest: 11
   duration: 2
   standing: false
@@ -138,6 +143,7 @@ items:
   lane: operations
   label: Support and upkeep
   circle: growth
+  owner: eng
   earliest: 13
   duration: 1
   standing: true
@@ -152,6 +158,7 @@ items:
   lane: product
   label: Enterprise tier
   circle: growth
+  owner: eng
   earliest: 14
   duration: 6
   standing: false
@@ -169,6 +176,7 @@ items:
   lane: go-to-market
   label: Partner channel
   circle: growth
+  owner: sales
   earliest: 16
   duration: 6
   standing: false
@@ -183,6 +191,7 @@ items:
   lane: product
   label: Mobile app
   circle: later
+  owner: eng
   earliest: 20
   duration: 8
   standing: false
@@ -298,11 +307,11 @@ nonLabor:
 scenarios:
 - id: as-planned
   name: As planned
-  gist: Dependencies and hire dates bind; capacity is reported, not enforced.
+  gist: Dependencies bind; unfilled seats hand their work to fallbacks; capacity is reported, not enforced.
   level: false
 - id: leveled
   name: Capacity-leveled
-  gist: A seat cannot carry more than it has; overloaded work slides later in priority order.
+  gist: Movable work slides later in priority order until its internal carriers fit; fixed load can still overload.
   level: true
 - id: eng-late
   name: Engineer four months late

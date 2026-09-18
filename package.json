@@ -14,6 +14,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
     }
   },
   "bin": {
@@ -30,8 +34,9 @@
     "test": "bunx vitest run",
     "typecheck": "tsc --noEmit",
     "check": "bun src/cli.ts check examples/studio.yaml",
-    "watch": "bun --watch src/cli.ts check examples/studio.yaml",
+    "watch": "bun src/cli.ts watch examples/studio.yaml",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "bun run build",
     "prepublishOnly": "bun run build && bun run test && bun run check"
   },
   "devDependencies": {

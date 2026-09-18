@@ -8,7 +8,6 @@ import {
   ledger,
   lintAll,
   lintPlan,
-  loadPlanFile,
   monthIndex,
   monthLabel,
   monthlyLoaded,
@@ -19,6 +18,7 @@ import {
   slips,
   type Plan,
 } from "../src/index";
+import { loadPlanFile } from "../src/node";
 
 const studio = () => loadPlanFile(new URL("../examples/studio.yaml", import.meta.url).pathname);
 const sc = (plan: Plan, id: string) => plan.scenarios!.find((s) => s.id === id)!;
