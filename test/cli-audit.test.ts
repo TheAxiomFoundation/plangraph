@@ -127,6 +127,57 @@ describe("defensive CLI audit", () => {
     expect(output.scenarios[0].externalFteMonths).toBeCloseTo(expected.externalFteMonths, 12);
   });
 
+  const chainPlan = (): Plan => {
+    const raw = basePlan();
+    const item = (id: string, label: string, over: Partial<Plan["items"][number]> = {}): Plan["items"][number] => ({
+      id,
+      lane: "lane",
+      label,
+      circle: "core",
+      earliest: 0,
+      duration: 1,
+      standing: false,
+      underway: false,
+      predecessors: [],
+      demands: [{ seat: "x", fte: 1, basis: "A" }],
+      ...over,
+    });
+    raw.items = [
+      item("p", "P", { duration: 4 }),
+      item("a", "A", { predecessors: [{ id: "p" }] }),
+      item("b", "B", { predecessors: [{ id: "a" }] }),
+    ];
+    raw.scenarios = [
+      AS_PLANNED,
+      { ...AS_PLANNED, id: "drop", name: "Drop", gist: "Without A.", dropItems: ["a"] },
+      { ...AS_PLANNED, id: "fast", name: "Fast", gist: "Everything takes half as long.", durationScale: 0.5 },
+    ];
+    return raw;
+  };
+
+  it("marks a dropped item in --json and never lists it as a slip", () => {
+    const path = writePlan(chainPlan());
+
+    const json = run("check", path, "--scenario", "drop", "--json");
+    expect(json.status).toBe(0);
+    const output = JSON.parse(json.stdout) as {
+      scenarios: Array<{
+        slips: Array<{ id: string; months: number; beyond: boolean }>;
+        items: Array<{ id: string; start: string | null; end: string | null; beyond: boolean; dropped: boolean; binding: unknown }>;
+      }>;
+    };
+    const items = output.scenarios[0].items;
+    expect(items.find((it) => it.id === "a")).toEqual({ id: "a", start: null, end: null, beyond: true, dropped: true, binding: { kind: "dropped" } });
+    expect(items.find((it) => it.id === "b")).toEqual({ id: "b", start: null, end: null, beyond: true, dropped: false, binding: { kind: "predecessor", id: "a" } });
+    expect(items.find((it) => it.id === "p")).toMatchObject({ beyond: false, dropped: false });
+    expect(output.scenarios[0].slips).toEqual([{ id: "b", label: "B", months: 12 - 5, beyond: true, binding: { kind: "predecessor", id: "a" } }]);
+
+    const text = run("check", path, "--scenario", "drop");
+    expect(text.status).toBe(0);
+    const line = physicalLines(text.stdout).find((l) => l.trim().startsWith("Slips vs baseline"));
+    expect(normalizedLine(line!)).toBe("Slips vs baseline B beyond horizon");
+  });
+
   it("D5 prints one line per structural E finding before any normal report", () => {
     const raw = basePlan();
     raw.items = [

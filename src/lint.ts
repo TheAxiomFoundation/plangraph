@@ -5,7 +5,7 @@
 
 import { atFundingYearEnd, byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
 import { lintPolicy, monthLabel, ownerOf, type Plan, type SeatId } from "./model.js";
-import { overloads, type Schedule } from "./schedule.js";
+import { overloads, type Schedule, type Scheduled } from "./schedule.js";
 
 export type Severity = "error" | "warn" | "info";
 
@@ -137,6 +137,15 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const H = cal.horizonMonths;
   const label = (m: number) => monthLabel(cal, m);
   const byId = new Map(s.items.map((x) => [x.item.id, x]));
+  /**
+   * For an item beyond the horizon, the item the scenario drops at the root of its chain of
+   * never-arriving predecessors, or null when the chain ends at capacity or the horizon.
+   */
+  const droppedUpstream = (it: Scheduled): Scheduled | null => {
+    let cur = it;
+    while (cur.beyond && cur.binding.kind === "predecessor") cur = byId.get(cur.binding.id)!;
+    return cur.dropped ? cur : null;
+  };
   const years = fundingYears(cal);
   const y1End = cal.fundingYearStartMonth + 12;
   const policy = lintPolicy(plan);
@@ -202,9 +211,16 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W104 slips against the declared start, with the binding constraint.
+  // W104 slips against the declared start, with the binding constraint. An item that never starts
+  // because the scenario drops something upstream says so, rather than blaming capacity or the horizon.
   for (const it of s.items) {
     if (it.dropped) continue;
+    const root = it.beyond ? droppedUpstream(it) : null;
+    if (root && it.binding.kind === "predecessor") {
+      const through = it.binding.id === root.item.id ? "" : ` through "${byId.get(it.binding.id)!.item.label}"`;
+      out.push({ code: "W104", severity: "warn", subject: it.item.id, message: `"${it.item.label}" never starts: this scenario drops "${root.item.label}", which it depends on${through}.`, hint: `Drop "${it.item.id}" from the scenario as well, or keep "${root.item.id}".` });
+      continue;
+    }
     if (it.beyond) {
       const why =
         it.binding.kind === "capacity"
@@ -257,9 +273,18 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W108 streams that never unlock.
+  // W108 streams that never unlock. One keyed to a dropped item, or to an item downstream of one,
+  // is still revenue the scenario loses; the hint says it was dropped rather than late.
   for (const st of plan.streams) {
-    if (l.unlocks[st.id] === null) out.push({ code: "W108", severity: "warn", subject: st.id, message: `Stream "${st.label}" never unlocks inside the horizon.`, hint: `Its item "${st.unlockedBy}" does not finish by ${label(H - 1)}.` });
+    if (l.unlocks[st.id] !== null) continue;
+    const it = byId.get(st.unlockedBy);
+    const root = it?.beyond ? droppedUpstream(it) : null;
+    const hint = !root
+      ? `Its item "${st.unlockedBy}" does not finish by ${label(H - 1)}.`
+      : root.item.id === st.unlockedBy
+        ? `Its item "${st.unlockedBy}" is dropped in this scenario.`
+        : `Its item "${st.unlockedBy}" never starts: this scenario drops "${root.item.id}", which it depends on.`;
+    out.push({ code: "W108", severity: "warn", subject: st.id, message: `Stream "${st.label}" never unlocks inside the horizon.`, hint });
   }
 
   // W109 portfolios too wide: a seat owning too many concurrent items.

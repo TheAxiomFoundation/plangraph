@@ -548,6 +548,96 @@ describe("demand profiles", () => {
     expect(findings.filter((f) => f.subject === "a")).toEqual([]);
   });
 
+  it("a dropped item sits at the horizon and is never a slip, whichever month the baseline started it", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [
+        work("p", { duration: 3 }),
+        work("a", { predecessors: [{ id: "p" }] }), // pushed by p: baseline start 3, declared 0
+        work("q", { earliest: 5 }), // baseline start is its declared month
+      ],
+    });
+    const base = schedule(plan, AS_PLANNED);
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a", "q"] });
+    expect(scheduled(plan, "a", AS_PLANNED).start).toBe(3);
+    expect(scheduled(plan, "q", AS_PLANNED).start).toBe(5);
+    for (const id of ["a", "q"]) {
+      expect(s.items.find((it) => it.item.id === id)).toMatchObject({
+        start: 12,
+        end: 12,
+        duration: 0,
+        beyond: true,
+        dropped: true,
+        binding: { kind: "dropped" },
+        carriers: [],
+      });
+    }
+    expect(slips(base, s)).toEqual([]);
+    // Dropped in the baseline and present in the other schedule: added, not moved.
+    expect(slips(s, base)).toEqual([]);
+  });
+
+  it("a dependent of a dropped item still slips beyond the horizon", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [work("p", { duration: 3 }), work("a", { predecessors: [{ id: "p" }] }), work("b", { predecessors: [{ id: "a" }] })],
+    });
+    const base = schedule(plan, AS_PLANNED);
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a"] });
+    expect(slips(base, s)).toEqual([
+      { id: "b", label: "b", months: 12 - 4, beyond: true, binding: { kind: "predecessor", id: "a" } },
+    ]);
+  });
+
+  it("W104 says a dependent of a dropped item never starts, not that capacity is short; W108 keeps the stream", () => {
+    const stream = (id: string, unlockedBy: string) => ({
+      id,
+      label: id,
+      unlockedBy,
+      unit: "units",
+      price: { usd: 10, basis: "A" as const, note: "audit price" },
+      volumeByYear: { units: [120], basis: "A" as const, note: "audit volume" },
+      rampMonths: 0,
+    });
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [
+        work("a"),
+        work("b", { predecessors: [{ id: "a" }] }),
+        work("c", { predecessors: [{ id: "b" }] }),
+        work("long", { duration: 20 }),
+        work("after", { predecessors: [{ id: "long" }] }),
+      ],
+      streams: [stream("from-a", "a"), stream("from-c", "c"), stream("from-long", "long")],
+    });
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a"] });
+    const findings = lintAll(plan, s, ledger(plan, s));
+    const w104 = (id: string) => findings.find((f) => f.code === "W104" && f.subject === id)!;
+    const w108 = (id: string) => findings.find((f) => f.code === "W108" && f.subject === id)!;
+
+    expect(findings.filter((f) => f.subject === "a")).toEqual([]);
+    expect(w104("b")).toMatchObject({
+      severity: "warn",
+      message: '"b" never starts: this scenario drops "a", which it depends on.',
+      hint: 'Drop "b" from the scenario as well, or keep "a".',
+    });
+    expect(w104("c")).toMatchObject({
+      severity: "warn",
+      message: '"c" never starts: this scenario drops "a", which it depends on through "b".',
+      hint: 'Drop "c" from the scenario as well, or keep "a".',
+    });
+    expect(w108("from-a").hint).toBe('Its item "a" is dropped in this scenario.');
+    expect(w108("from-c").hint).toBe('Its item "c" never starts: this scenario drops "a", which it depends on.');
+
+    // An item beyond the horizon for any other reason keeps the capacity wording.
+    expect(w104("long")).toMatchObject({
+      message: '"long" does not fit inside the horizon: its run would extend past the horizon.',
+      hint: "Lower the effort assumption, add a seat, or drop the item.",
+    });
+    expect(w104("after").message).toBe('"after" does not fit inside the horizon: "long" never finishes.');
+    expect(w108("from-long").hint).toBe('Its item "long" does not finish by 2027-12.');
+  });
+
   it("priority books ahead of the id order inside a circle", () => {
     const plan = fixture({
       calendar: { startYear: 2027, startMonth: 1, horizonMonths: 6, fundingYearStartMonth: 0 },

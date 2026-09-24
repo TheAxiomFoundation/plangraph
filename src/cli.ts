@@ -98,6 +98,7 @@ function check(): 0 | 1 | 2 {
           start: it.beyond ? null : monthLabel(plan.calendar, it.start),
           end: it.beyond ? null : monthLabel(plan.calendar, it.end - 1),
           beyond: it.beyond,
+          dropped: it.dropped === true,
           binding: it.binding,
         })),
         findings: s.findings,

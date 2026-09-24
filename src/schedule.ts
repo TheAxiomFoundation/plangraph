@@ -26,7 +26,7 @@ export type Binding =
 export interface Scheduled {
   item: WorkItem;
   start: number;
-  /** Exclusive. Equal to the horizon for standing items and for items beyond it. */
+  /** Exclusive. Equal to the horizon for standing items and for items beyond it, dropped items included (start too). */
   end: number;
   /** Months actually scheduled: the item's duration, or the horizon minus start for standing items. */
   duration: number;
@@ -267,14 +267,15 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
 
   const droppedItems = new Set(scenario.dropItems ?? []);
   for (const i of order(plan.items, plan.circles)) {
+    if (droppedItems.has(i.id)) {
+      // Not in this scenario: no run, no bookings. It sits at the horizon like any item beyond
+      // it, and dependents treat it as never arriving.
+      done.set(i.id, { item: i, start: H, end: H, duration: 0, beyond: true, dropped: true, binding: { kind: "dropped" }, carriers: [] });
+      continue;
+    }
     let start = Math.max(0, i.earliest);
     let binding: Binding = i.underway ? { kind: "underway" } : { kind: "declared" };
     let beyond = false;
-    if (droppedItems.has(i.id)) {
-      // Not in this scenario: no run, no bookings; dependents treat it as never arriving.
-      done.set(i.id, { item: i, start, end: start, duration: 0, beyond: true, dropped: true, binding: { kind: "dropped" }, carriers: [] });
-      continue;
-    }
     if (!i.underway) {
       for (const p of [...i.predecessors].sort((x, y) => (x.id < y.id ? -1 : 1))) {
         const pd = done.get(p.id)!;
@@ -351,10 +352,14 @@ export interface Slip {
   binding: Binding;
 }
 
-/** Items that moved against a baseline schedule, largest slip first. */
+/**
+ * Items that moved against a baseline schedule, largest slip first. An item either schedule
+ * drops is left out: it does not exist there, so it has not moved. Its dependents still slip.
+ */
 export function slips(base: Schedule, other: Schedule): Slip[] {
   const byId = new Map(base.items.map((s) => [s.item.id, s]));
   return other.items
+    .filter((s) => !s.dropped && !byId.get(s.item.id)!.dropped)
     .map((s) => {
       const b = byId.get(s.item.id)!;
       return { id: s.item.id, label: s.item.label, months: s.start - b.start, beyond: s.beyond && !b.beyond, binding: s.binding };
