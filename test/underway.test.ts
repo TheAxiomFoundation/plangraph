@@ -245,6 +245,37 @@ describe("underway work books before planned work", () => {
     expect(starts(plan, { ...LEVELED, id: "without-p", dropItems: ["p"] })).toEqual({ m: 3, p: "beyond", u: 0, q: 4 });
   });
 
+  it("an underway item pulls none of its planned predecessors ahead of work that outranks them", () => {
+    // u waits for nothing, so its predecessor p books at p's own rank, after the core item r.
+    const seats = [role("x"), role("y")];
+    const u = work("u", { underway: true, priority: -1, predecessors: [{ id: "p" }], demands: [{ seat: "y", fte: 1, basis: "A" }] });
+    const p = work("p", { circle: "later" });
+    const r = work("r");
+    expect(starts(fixture({ seats, items: [u, p, r] }))).toEqual({ u: 0, r: 0, p: 3 });
+    // A planned successor that outranks p still waits for it, so it still pulls p ahead.
+    const s = work("s", { priority: -2, duration: 1, predecessors: [{ id: "p" }], demands: [{ seat: "y", fte: 1, basis: "A" }] });
+    expect(starts(fixture({ seats, items: [u, p, r, s] }))).toEqual({ u: 0, p: 0, r: 3, s: 3 });
+  });
+
+  it("a planned successor of underway work is not held back by the underway item's predecessors", () => {
+    const plan = fixture({
+      items: [
+        work("m"),
+        work("p", { circle: "later" }),
+        work("u", { underway: true, circle: "later", predecessors: [{ id: "p" }] }),
+        work("q", { duration: 1, predecessors: [{ id: "u", lag: 1 }], demands: [{ seat: "x", fte: 0.1, basis: "A" }] }),
+      ],
+    });
+    const s = schedule(plan, LEVELED);
+    expect(at(s, "u")).toMatchObject({ start: 0, binding: { kind: "underway" } });
+    expect(at(s, "m")).toMatchObject({ start: 3, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    // q is ready at month 4 (u ends at 3, lag 1); m fills months 4 and 5, so q books at 6,
+    // and p, a later-circle item that q never waits for, books after it.
+    expect(at(s, "q")).toMatchObject({ start: 6, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    expect(at(s, "p")).toMatchObject({ start: 7, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    expect(overloads(s)).toEqual([]);
+  });
+
   it("leveling sees underway load that a fallback carries", () => {
     const plan = fixture({
       seats: [role("x"), role("y", { hireMonths: [6], fallback: "x" })],
