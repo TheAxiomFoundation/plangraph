@@ -67,12 +67,13 @@ describe("defensive schedule audit", () => {
     const result = schedule(plan, LEVELED);
     const b = result.items.find((item) => item.item.id === "b")!;
 
+    // From months 0 and 1 the run would fit the horizon but x is full; from 2 on it would not.
     expect(b).toMatchObject({
       start: 4,
       end: 4,
       duration: 0,
       beyond: true,
-      binding: { kind: "horizon" },
+      binding: { kind: "capacity", seat: "x", carrier: "x" },
       carriers: [],
     });
     expect(result.loads.find((load) => load.seat === "x")!.demand).toEqual([1, 1, 1, 0]);
@@ -210,12 +211,13 @@ describe("defensive schedule audit", () => {
     const result = schedule(plan, LEVELED);
     const standing = result.items.find((item) => item.item.id === "z-standing")!;
 
+    // Standing work never overshoots the horizon, so what kept it out is the full seat.
     expect(standing).toMatchObject({
       start: 3,
       end: 3,
       duration: 0,
       beyond: true,
-      binding: { kind: "horizon" },
+      binding: { kind: "capacity", seat: "x", carrier: "x" },
       carriers: [],
     });
     expect(result.bookings.filter((booking) => booking.item === "z-standing")).toEqual([]);
@@ -279,13 +281,14 @@ describe("defensive schedule audit", () => {
       hireDelay: { x: 4 },
     });
 
+    // The run fits the horizon from months 1 to 3, but x is not hired until month 4.
     expect(slips(baseline, delayed)).toEqual([
       {
         id: "late",
         label: "late",
         months: 3,
         beyond: true,
-        binding: { kind: "horizon" },
+        binding: { kind: "capacity", seat: "x", carrier: "x" },
       },
     ]);
     expect(slips(delayed, baseline)[0]).toMatchObject({ months: -3, beyond: false });
@@ -451,6 +454,103 @@ describe("dropSeats and unlevelled", () => {
     const w101 = lintAll(plan, s, ledger(plan, s)).filter((f) => f.code === "W101" && f.subject === "ceo");
     expect(w101).toHaveLength(1);
     expect(() => parsePlan({ ...plan, seats: [{ ...plan.seats[0], unlevelled: "yes" }, plan.seats[1]] })).toThrow(/unlevelled/);
+  });
+});
+
+describe("the binding of work leveling pushes beyond the horizon", () => {
+  const w104 = (plan: Plan, id: string) => {
+    const s = schedule(plan, LEVELED);
+    return lintAll(plan, s, ledger(plan, s)).find((f) => f.code === "W104" && f.subject === id);
+  };
+
+  it("names the seat, not the horizon, when the run would fit but for capacity", () => {
+    // a holds x for months 0-4. b's three months would fit the horizon from any start up to
+    // month 3, but x is full until month 5.
+    const plan = fixture({ items: [work("a", { duration: 5 }), work("b", { duration: 3 })] });
+    expect(scheduled(plan, "b")).toMatchObject({ beyond: true, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    expect(w104(plan, "b")!.message).toBe('"b" does not fit inside the horizon: leveling found no start with room for it; the last seat without room was x.');
+    expect(scheduled(plan, "b", AS_PLANNED)).toMatchObject({ start: 0, beyond: false, binding: { kind: "declared" } });
+  });
+
+  it("names the horizon when the run is longer than the months left, whether or not its seat is full", () => {
+    // late and spare start at month 4 and need three months, with two left. x is still full in
+    // month 4; y is free throughout. b, taken first, is kept out by x.
+    const plan = fixture({
+      seats: [role("x"), role("y")],
+      items: [
+        work("a", { duration: 5 }),
+        work("b", { duration: 3 }),
+        work("late", { earliest: 4, duration: 3 }),
+        work("spare", { earliest: 4, duration: 3, demands: [{ seat: "y", fte: 0.1, basis: "A" }] }),
+      ],
+    });
+    expect(scheduled(plan, "b")).toMatchObject({ beyond: true, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    for (const id of ["late", "spare"]) {
+      expect(scheduled(plan, id)).toMatchObject({ beyond: true, binding: { kind: "horizon" } });
+      expect(w104(plan, id)!.message).toBe(`"${id}" does not fit inside the horizon: its run would extend past the horizon.`);
+    }
+  });
+
+  it("names the last seat that had no room when different seats block different months", () => {
+    // x is full in months 0-1 and y in months 2-5; c needs both for two months. y had room
+    // for a start at month 0, but x did not, and y is the last seat found full.
+    const plan = fixture({
+      seats: [role("x"), role("y")],
+      items: [
+        work("a", { priority: -2, duration: 2 }),
+        work("b", { priority: -1, earliest: 2, duration: 4, demands: [{ seat: "y", fte: 1, basis: "A" }] }),
+        work("c", { duration: 2, demands: [{ seat: "x", fte: 1, basis: "A" }, { seat: "y", fte: 1, basis: "A" }] }),
+      ],
+    });
+    expect(scheduled(plan, "c")).toMatchObject({ beyond: true, binding: { kind: "capacity", seat: "y", carrier: "y" } });
+    expect(w104(plan, "c")!.message).toBe('"c" does not fit inside the horizon: leveling found no start with room for it; the last seat without room was y.');
+  });
+
+  it("names the last seat that had no room for work leveling delays inside the horizon", () => {
+    // The same seats over eight months, with y full only in months 2-3: c fails on x from
+    // months 0 and 1, on y from months 2 and 3, and fits from month 4.
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 8, fundingYearStartMonth: 0 },
+      seats: [role("x"), role("y")],
+      items: [
+        work("a", { priority: -2, duration: 2 }),
+        work("b", { priority: -1, earliest: 2, duration: 2, demands: [{ seat: "y", fte: 1, basis: "A" }] }),
+        work("c", { duration: 2, demands: [{ seat: "x", fte: 1, basis: "A" }, { seat: "y", fte: 1, basis: "A" }] }),
+      ],
+    });
+    expect(scheduled(plan, "c")).toMatchObject({ start: 4, end: 6, beyond: false, binding: { kind: "capacity", seat: "y", carrier: "y" } });
+  });
+
+  it("names the carrier that is full when the seat asked for falls back to it", () => {
+    const plan = fixture({
+      seats: [role("x"), role("w", { title: "Writer", hireMonths: [6], fallback: "x" })],
+      items: [work("a", { priority: -1, duration: 6 }), work("b", { duration: 2, demands: [{ seat: "w", fte: 1, basis: "A" }] })],
+    });
+    expect(scheduled(plan, "b")).toMatchObject({ beyond: true, binding: { kind: "capacity", seat: "w", carrier: "x" } });
+    expect(w104(plan, "b")!.message).toMatch(/the last seat without room was x\.$/);
+  });
+
+  it("chooses the same seat whatever the order of the demands", () => {
+    const make = (demands: WorkItem["demands"]): Plan =>
+      fixture({ seats: [role("x", { hireMonths: [6] }), role("y", { hireMonths: [6] })], items: [work("both", { owner: "y", demands })] });
+    const xy = [
+      { seat: "x", fte: 1, basis: "A" as const },
+      { seat: "y", fte: 1, basis: "A" as const },
+    ];
+    const left = scheduled(make(xy), "both");
+    const right = scheduled(make([...xy].reverse()), "both");
+    expect(left).toMatchObject({ beyond: true, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    expect(right.binding).toEqual(left.binding);
+  });
+
+  it("gives standing work the seat full in the last month, and a delayed start its own duration", () => {
+    // Standing work never overshoots the horizon, so leveling ends on the seat's last month.
+    const shut = fixture({ items: [work("busy", { duration: 6 }), work("z", { standing: true })] });
+    expect(scheduled(shut, "z")).toMatchObject({ beyond: true, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    expect(w104(shut, "z")!.message).toBe('"z" does not fit inside the horizon: leveling found no start with room for it; the last seat without room was x.');
+
+    const delayed = scheduled(fixture({ items: [work("busy", { duration: 2 }), work("z", { standing: true })] }), "z");
+    expect(delayed).toMatchObject({ start: 2, end: 6, duration: 4, beyond: false, binding: { kind: "capacity", seat: "x", carrier: "x" } });
   });
 });
 
