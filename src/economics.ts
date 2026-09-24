@@ -65,11 +65,21 @@ export function ledger(plan: Plan, s: Schedule): Ledger {
   const headcount = zeros();
   for (const seat of plan.seats) {
     const months = s.hires[seat.id] ?? [];
-    const index = s.hireIndex?.[seat.id];
+    // A schedule without a hireIndex entry for the seat cannot say which declared hire is
+    // which. effectiveHiring keeps the declared order, so while the role keeps every hire,
+    // position is the declared index; after a drop, position can name a dropped hire, so each
+    // hire takes the role's rate instead, as a hire with no loadedAnnualByHire entry does. So
+    // does a hire that a partial entry leaves out.
+    const index = has(s.hireIndex ?? undefined, seat.id)
+      ? s.hireIndex[seat.id]
+      : months.length === seat.hireMonths.length ? months.map((_, j) => j) : undefined;
     for (let m = 0; m < H; m++) {
       addFinite(headcount, m, seatsHired(months, m), "headcount");
       months.forEach((h, j) => {
-        if (h <= m) addFinite(labor, m, hireMonthlyCost(plan, seat, index?.[j] ?? j, m), "labor cost");
+        if (h <= m) {
+          const k = index?.[j];
+          addFinite(labor, m, k === undefined ? seatMonthlyCost(plan, seat, m) : hireMonthlyCost(plan, seat, k, m), "labor cost");
+        }
       });
     }
   }

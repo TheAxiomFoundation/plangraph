@@ -11,16 +11,22 @@ import { specHires } from "./oracle";
 const fundingYear = (plan: Plan, m: number): number => Math.floor((m - plan.calendar.fundingYearStartMonth) / 12) + 1;
 
 /**
- * Loaded monthly cost of hire k of a seat in month m (SeatDef in model.ts): the hire's own
- * per-year schedule, else the role's per-year schedule, else loadedAnnual escalated from
- * funding year 2; months before the funding year opens use year 1; the last value holds.
+ * The role's own loaded monthly cost in month m (SeatDef in model.ts): its per-year schedule,
+ * else loadedAnnual escalated from funding year 2; months before the funding year opens use
+ * year 1; the last value holds.
  */
+export function roleCost(plan: Plan, s: SeatDef, m: number): number {
+  const y = Math.max(0, fundingYear(plan, m) - 1);
+  if (s.loadedAnnualByYear && s.loadedAnnualByYear.length) return s.loadedAnnualByYear[Math.min(y, s.loadedAnnualByYear.length - 1)] / 12;
+  return (s.loadedAnnual * (1 + plan.escalation.rate) ** y) / 12;
+}
+
+/** Loaded monthly cost of hire k of a seat in month m: the hire's own per-year schedule (the last value holding), else the role's. */
 export function hireCost(plan: Plan, s: SeatDef, k: number, m: number): number {
   const y = Math.max(0, fundingYear(plan, m) - 1);
   const ownRate = s.loadedAnnualByHire?.[k];
   if (ownRate && ownRate.length) return ownRate[Math.min(y, ownRate.length - 1)] / 12;
-  if (s.loadedAnnualByYear && s.loadedAnnualByYear.length) return s.loadedAnnualByYear[Math.min(y, s.loadedAnnualByYear.length - 1)] / 12;
-  return (s.loadedAnnual * (1 + plan.escalation.rate) ** y) / 12;
+  return roleCost(plan, s, m);
 }
 
 export interface LedgerRows {

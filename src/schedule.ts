@@ -89,7 +89,12 @@ export interface Schedule {
   loads: SeatLoad[];
   /** Effective hire months after the scenario's drops and delays. */
   hires: Record<SeatId, number[]>;
-  /** For each effective hire, its index into the role's hireMonths (so per-hire costs stay aligned). */
+  /**
+   * For each effective hire, its index into the role's hireMonths (so per-hire costs stay
+   * aligned). Without a seat's entry, the ledger prices its hires by position only while the
+   * role keeps every hire; after a drop, and for a hire a partial entry leaves out, it uses
+   * the role's rate.
+   */
   hireIndex: Record<SeatId, number[]>;
   /** FTE-months routed to external carriers, by month: uncosted and uncapped, but counted. */
   external: number[];
