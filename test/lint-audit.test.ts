@@ -310,7 +310,7 @@ describe("W101 under leveling names the load leveling does not wait for", () => 
   });
 
   it("says a leadership seat absorbs once hired, and holds only its own items for the hire, under either levelOn", () => {
-    const hint = "Leveling does not wait for room on a leadership seat, only for its hire on an item it owns, so its overload is reported here instead." + advice;
+    const hint = "Leveling does not wait for room on a leadership seat, only for the hire of one with no fallback on an item it owns, so its overload is reported here instead." + advice;
     const items = ["a", "b"].map((id) => work(id, { owner: "ceo", duration: 4, demands: [{ seat: "ceo", fte: 1, basis: "A" }] }));
     for (const levelOn of ["all", "owner"] as const) {
       const inPlace = fixture({ levelOn, seats: [role("ceo", { unlevelled: true })], items });
@@ -403,7 +403,8 @@ describe("thresholds on sums do not flip with the order they were added", () => 
   const salaried = (annuals: number[]): SeatDef[] => annuals.map((loadedAnnual, k) => role(`s${k}`, { loadedAnnual }));
 
   it("W106: revenue at exactly the policy's assumed share does not warn, in any order of streams", () => {
-    // 2,400 of 3,000 units are assumed: exactly 80%. Summed by month, the share lands either side.
+    // 24 of 30 units a year are assumed: exactly 80% of revenue. Summed by month, the share
+    // lands on 80% in some orders of streams and a hair above it in others.
     const stream = (id: string, units: number, basis: "A" | "M"): Plan["streams"][number] => ({
       id,
       label: id,
@@ -458,5 +459,23 @@ describe("thresholds on sums do not flip with the order they were added", () => 
     for (const plan of make([100_000, 50_000, 70_000], [25_000, 15_000, 14_900])) expect(finding(plan, "W112")).toBeDefined();
     // One seat and one line: monthly twelfths alone leave cost a hair under 100,000.
     expect(finding(make([80_000], [20_000])[0], "W112")).toBeUndefined();
+  });
+
+  it("W105: cash that ends exactly at zero is not negative, in any order of seats", () => {
+    // Twelve monthly twelfths of each salary, added seat by seat, can leave cash a hair
+    // below zero in some orders of seats.
+    const make = (annuals: number[], funded: number): Plan[] =>
+      permutations(salaried(annuals)).map((seats) =>
+        fixture({ seats, funding: [{ id: "grant", label: "grant", byMonth: [funded], basis: "A", note: "audit fixture", counted: true }] }),
+      );
+    const ends = (plans: Plan[]) => plans.map((plan) => ledger(plan, schedule(plan, AS_PLANNED)).cash[11]);
+    for (const [annuals, funded] of [
+      [[80_000, 30_000, 28_000], 138_000],
+      [[100_000, 50_000, 70_000], 220_000],
+    ] as const) {
+      expect(ends(make([...annuals], funded)).some((cash) => cash < 0)).toBe(true);
+      for (const plan of make([...annuals], funded)) expect(finding(plan, "W105")).toBeUndefined();
+      for (const plan of make([...annuals], funded - 1)) expect(finding(plan, "W105")!.message).toBe("Cash turns negative in 2027-12; trough -0.00M.");
+    }
   });
 });

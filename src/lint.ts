@@ -25,9 +25,11 @@ const percent = (share: number): string => `${Number((share * 100).toFixed(1))}%
 /**
  * Sums of FTE and of dollars can differ in their last bit with the order they were added, so
  * thresholds on sums, and on shares of them, get the slack overloads() uses: a value exactly
- * at a threshold counts as at it, whatever the order.
+ * at a threshold counts as at it, whatever the order. Cash is a running sum of dollars whose
+ * drift can pass that slack, so W105 gets half a cent instead.
  */
 const SLACK = 1e-9;
+const CASH_SLACK = 0.005;
 
 /** Structural checks that need no schedule. */
 export function lintPlan(plan: Plan): Finding[] {
@@ -153,7 +155,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte - SLACK) {
       // Under leveling, the hint names the load leveling does not wait for on this seat.
       const left = plan.seats.find((x) => x.id === o.seat)?.unlevelled
-        ? "Leveling does not wait for room on a leadership seat, only for its hire on an item it owns, so its overload is reported here instead."
+        ? "Leveling does not wait for room on a leadership seat, only for the hire of one with no fallback on an item it owns, so its overload is reported here instead."
         : plan.levelOn === "owner"
           ? "Under levelOn owner, leveling waits for room on this seat only for items it owns and never for underway work, so underway load or work on items it does not own is what puts it over."
           : "Leveling waits for room on this seat for all but underway work, so underway load is what puts it over.";
@@ -243,7 +245,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   }
 
   // W105 cash goes negative.
-  const firstNeg = l.cash.findIndex((c) => c < 0);
+  const firstNeg = l.cash.findIndex((c) => c < -CASH_SLACK);
   if (firstNeg >= 0) {
     let trough = l.cash[firstNeg];
     for (let m = firstNeg + 1; m < l.cash.length; m++) trough = Math.min(trough, l.cash[m]);

@@ -132,7 +132,8 @@ W113 or W114.
 A sum of FTE or dollars can differ in its last bit with the order it was added up, so the
 thresholds on sums and on shares of them (W101's peak, W102's share, W106's share, W111's
 ratio, W112's share, W115 and W116) allow 1e-9 of slack, as the scheduler does: a value
-exactly at a threshold counts as at it, whatever the order.
+exactly at a threshold counts as at it, whatever the order. W105 counts cash within half a
+cent of zero as zero, since a running sum of dollars can drift by more than 1e-9.
 
 ## Compared with TaskJuggler
 
