@@ -1,15 +1,17 @@
 // The scheduler: a serial schedule-generation scheme over the plan graph.
 //
-// Items are taken in priority order (circle, then declared start, then id), predecessors
-// always first. Each starts at the latest of: its declared earliest month; every
-// predecessor's end plus lag (a standing predecessor counts from its start plus one, since
-// it never ends); and, when the scenario levels capacity, the first month from which every
-// carrier it needs has room for the whole run. Demands are resolved to carriers month by
-// month and aggregated per carrier before they are compared with capacity, so two demands
-// that land on the same person count together.
+// Items are taken in priority order (circle, then the item's priority, then declared start,
+// then id), each after its predecessors, which go in id order. Each planned item starts at the
+// later of its declared earliest month and every predecessor's end plus lag (a standing
+// predecessor counts from its start plus one, since it never ends); when the scenario levels
+// capacity, it then waits for the first month from which every carrier it needs has room for
+// the whole run (with plan.levelOn "owner", only the owner's seat; see fits() for unlevelled
+// seats). An underway item keeps its declared start: it waits for nothing and is not leveled.
+// Demands are resolved to carriers month by month and aggregated per carrier before they are
+// compared with capacity, so two demands that land on the same person count together.
 //
 // A finite item must fit entirely inside the horizon to be scheduled; one that cannot is
-// beyond the horizon: it books nothing, unlocks nothing, and takes its dependents with it.
+// beyond the horizon: it books nothing, unlocks nothing, and takes its planned dependents with it.
 //
 // Every start records the constraint that bound it. Deterministic: same inputs, same output.
 
@@ -26,13 +28,13 @@ export type Binding =
 export interface Scheduled {
   item: WorkItem;
   start: number;
-  /** Exclusive. Equal to the horizon for standing items and for items beyond it. */
+  /** Exclusive. Equal to the horizon for standing items and for items beyond it, except a dropped item, whose start and end are both its declared month. */
   end: number;
   /** Months actually scheduled: the item's duration, or the horizon minus start for standing items. */
   duration: number;
   /** True when the item cannot complete inside the horizon. It books nothing. */
   beyond: boolean;
-  /** True when the scenario drops the item: it does not exist, books nothing, and no finding names it. */
+  /** True when the scenario drops the item: it does not exist, books nothing, and no scenario finding is about it. */
   dropped?: boolean;
   binding: Binding;
   /** Who carries each demand at the start month: the seat, or its fallback. Empty when beyond. */
@@ -229,10 +231,12 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       for (const [carrier, demand] of landed) {
         const load = loads.get(carrier);
         // Leadership absorbs rather than slips, so its overload is reported, not scheduled around.
-        // The one exception: an item OWNED by a leadership seat that is not yet hired waits for
-        // the hire; a contribution from an unhired leadership seat is unstaffed, not blocking.
+        // The one exception: an item OWNED by a leadership seat that leaves its load on that
+        // seat while it has no hire (fallback null) waits for the hire. A contribution left on
+        // an unhired leadership seat is unstaffed, not blocking. Demand a fallback carries, the
+        // owner's included, is leveled on that fallback as usual.
         if (unlevelled.has(carrier) && ((load?.capacity[m] ?? 0) > 0 || carrier !== ownerOf(i))) continue;
-        if (plan.levelOn === "owner" && carrier !== ownerOf(i)) continue; // contributors are reported, not waited for
+        if (plan.levelOn === "owner" && carrier !== ownerOf(i)) continue; // load off the owner's seat is reported, not waited for
         const short = load ? load.demand[m] + demand.fte - load.capacity[m] : demand.fte;
         const earlier =
           worst !== null &&
