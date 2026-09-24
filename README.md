@@ -87,11 +87,19 @@ cannot finish inside the horizon, underway or not, goes beyond it: it books noth
 unlocks nothing, and takes its dependents with it. Standing work runs from its scheduled
 start to the horizon.
 
+When leveling moves a start, its binding says what the item waited for: `capacity`, a seat
+that had no room, or `hire`, when nobody was hired yet to carry the demand, on its seat or
+anywhere along the seat's fallback chain. W104 prints a `hire` binding as a wait for that
+hire, with the month it lands, since the hire date and not the seat's workload is what moves
+the item. A pooled role that is full until its next hire is still `capacity`: someone is
+there, and there is no room.
+
 An item beyond the horizon says why in its binding, and W104 repeats it: a predecessor that
 never finishes; the horizon, when the run is longer than the months left after its declared
 start and its predecessors; or, when leveling pushed it out, the seat that last had no room
-for it. An item the scenario drops (`dropItems`) has binding `dropped`, and W104 leaves it
-out.
+for it, or a `hire` when nobody was hired to carry its demand by the last month its run
+could start (W104 says when the hire lands, or that the scenario never makes it). An item
+the scenario drops (`dropItems`) has binding `dropped`, and W104 leaves it out.
 
 ## Funding clock and reports
 

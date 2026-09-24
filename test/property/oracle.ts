@@ -199,23 +199,58 @@ export function fitsAt(ctx: Ctx, load: Load, i: WorkItem, t: number): Fit {
 }
 
 /**
- * Whether a capacity binding names what the documented search found for a run from t: a
- * carrier short of room in the first short month, with the largest shortfall there (the doc
+ * Whether a capacity or hire binding names what the documented search found for a run from t:
+ * a carrier short of room in the first short month, with the largest shortfall there (the doc
  * comment on fits() in src/schedule.ts), and a seat of the item whose demand lands on that
- * carrier. Returns what is wrong, or null.
+ * carrier. The kind follows from the named carrier (the Binding doc comment): a hire when the
+ * short month is the run's first, nobody is hired to the carrier then, and the named seat's
+ * own demand there is more than nothing; else capacity. Returns what is wrong, or null.
  */
-function capacityBindingProblem(ctx: Ctx, load: Load, i: WorkItem, t: number, b: Binding): string | null {
+function blockedBindingProblem(ctx: Ctx, load: Load, i: WorkItem, t: number, b: Binding): string | null {
   const f = fitsAt(ctx, load, i, t);
   if (f.ok) return `a run from ${t} fits, so nothing was short there`;
   if (f.why !== "capacity") return `a run from ${t} passes the horizon, so no seat was short there`;
   const shortList = [...f.short].map(([c, x]) => `${c}+${+x.toFixed(6)}`).join(",");
-  if (b.kind !== "capacity") return `expected a capacity binding for the run from ${t} (short in month ${f.month}: ${shortList}), got ${JSON.stringify(b)}`;
+  if (b.kind !== "capacity" && b.kind !== "hire") return `expected a capacity or hire binding for the run from ${t} (short in month ${f.month}: ${shortList}), got ${JSON.stringify(b)}`;
   const mine = f.short.get(b.carrier);
   if (mine === undefined) return `binding names carrier ${b.carrier}, not short in month ${f.month} of the run from ${t} (short: ${shortList})`;
   const worst = Math.max(...f.short.values());
   if (mine < worst - TIE) return `binding names carrier ${b.carrier}, short by ${mine}, but the largest shortfall in month ${f.month} of the run from ${t} is ${worst} (short: ${shortList})`;
-  const seatsOn = specPlacements(ctx, i, f.month, t).filter((p) => p.carrier === b.carrier).map((p) => p.seat);
-  if (!seatsOn.includes(b.seat)) return `binding names seat ${b.seat}, whose demand does not land on ${b.carrier} in month ${f.month} (seats there: ${seatsOn.join(",")})`;
+  const on = specPlacements(ctx, i, f.month, t).filter((p) => p.carrier === b.carrier);
+  if (!on.some((p) => p.seat === b.seat)) return `binding names seat ${b.seat}, whose demand does not land on ${b.carrier} in month ${f.month} (seats there: ${on.map((p) => p.seat).join(",")})`;
+  const asking = on.filter((p) => p.fte > EPS);
+  const unhired = hiredAt(ctx.hires[b.carrier]?.months ?? [], f.month) === 0;
+  const kind = f.month === t && unhired && asking.length > 0 ? "hire" : "capacity";
+  if (b.kind !== kind) return `binding kind ${b.kind}, but carrier ${b.carrier} in month ${f.month} (the run's ${f.month === t ? "first" : "later"} month) is ${unhired ? "unhired" : "hired"} and ${asking.length ? "asked for" : "asked for nothing"}: expected ${kind}`;
+  if (kind === "hire" && !asking.some((p) => p.seat === b.seat)) return `hire binding names seat ${b.seat}, which asks nothing of ${b.carrier} in month ${f.month}`;
+  return null;
+}
+
+/**
+ * The promises the Binding doc comment makes for a hire, checked directly: for a scheduled
+ * item, the role that carries the named seat's demand at the start is hired for the first
+ * time in the start month; for an item beyond the horizon, nobody on the seat's fallback chain
+ * is hired by `last`, the last start leveling found short of room, and every later start
+ * passes the horizon, so `last` is the last month the run could start.
+ */
+function hirePromiseProblem(ctx: Ctx, load: Load, i: WorkItem, it: Scheduled, last: number): string | null {
+  const b = it.binding;
+  if (b.kind !== "hire") return null;
+  if (!it.beyond) {
+    const x = specCarrier(ctx.plan, ctx.hires, b.seat, it.start);
+    if (x === "external") return `hire binding, but ${b.seat}'s demand goes to external at the start ${it.start}`;
+    const now = hiredAt(ctx.hires[x]?.months ?? [], it.start);
+    const before = hiredAt(ctx.hires[x]?.months ?? [], it.start - 1);
+    if (now === 0 || before > 0) return `hire binding, but ${x}, which carries ${b.seat}'s demand at the start ${it.start}, has ${before} hired the month before and ${now} at the start`;
+    return null;
+  }
+  if (last < 0) return `beyond with a hire binding, but no start was short of room`;
+  const c = specCarrier(ctx.plan, ctx.hires, b.seat, last);
+  if (c !== "external" && hiredAt(ctx.hires[c]?.months ?? [], last) > 0) return `beyond with a hire binding, but ${c} is hired by ${last}, the last start short of room, to carry ${b.seat}'s demand`;
+  for (let t = last + 1; t < ctx.H; t++) {
+    const f = fitsAt(ctx, load, i, t);
+    if (f.ok || f.why !== "horizon") return `beyond with a hire binding at last start ${last}, but a run from ${t} ${f.ok ? "fits" : "is short of room"}, so ${last} is not the last month the run could start`;
+  }
   return null;
 }
 
@@ -244,12 +279,16 @@ export interface Coverage {
   beyondByCapacity: number;
   /** Leveled moves and capacity beyonds where a carrier short of room holds underway load. */
   heldByUnderway: number;
+  /** Leveled moves that waited for a hire. */
+  hireWaits: number;
+  /** Items leveling kept beyond the horizon waiting for a hire that lands too late or never. */
+  hireTooLate: number;
   dropped: number;
 }
 
 export const zeroCoverage = (): Coverage => ({
   hiresChanged: 0, scheduled: 0, underway: 0, withPredecessor: 0, standingPredecessor: 0, fallbackBookings: 0, externalBookings: 0,
-  leveledMoves: 0, beyondByPredecessor: 0, beyondByTime: 0, beyondByCapacity: 0, heldByUnderway: 0, dropped: 0,
+  leveledMoves: 0, beyondByPredecessor: 0, beyondByTime: 0, beyondByCapacity: 0, heldByUnderway: 0, hireWaits: 0, hireTooLate: 0, dropped: 0,
 });
 
 const pred = (pd: Scheduled, lag = 0): number => (pd.item.standing ? pd.start + 1 : pd.end) + lag;
@@ -280,6 +319,9 @@ const pred = (pd: Scheduled, lag = 0): number => (pd.item.standing ? pd.start + 
  *              start fits
  * P2.complete  leveling put nothing beyond the horizon that fits somewhere from its readiness
  * P2.beyond-label  the horizon label is never used when capacity, not time, kept the item out
+ * P2.hire     a hire binding keeps its promise: the role carrying the demand at the start is
+ *              first hired that month, or, beyond the horizon, nobody on the seat's chain is
+ *              hired by the last month the run could start
  */
 export function checkSchedule(plan: Plan, sc: Scenario, S: Schedule): { violations: Violation[]; coverage: Coverage } {
   const v: Violation[] = [];
@@ -388,8 +430,11 @@ export function checkSchedule(plan: Plan, sc: Scenario, S: Schedule): { violatio
         v.push({ prop: "P2.beyond-label", item: i.id, msg: `binding horizon, but a ${specDuration(plan, sc, i, ready)}-month run from ready month ${ready} ends by ${H}; capacity kept it out (at ${ready}: ${f.ok ? "fits" : f.why === "capacity" ? `short ${[...f.short.keys()].join(",")} in month ${f.month}` : f.why})` });
       } else if (leveled) {
         // Otherwise the binding is the capacity failure at the last start leveling tried and found without room.
-        const problem = last < 0 ? `binding ${JSON.stringify(b)}, but no start from ${ready} was short of room` : capacityBindingProblem(ctx, load, i, last, b);
+        const problem = last < 0 ? `binding ${JSON.stringify(b)}, but no start from ${ready} was short of room` : blockedBindingProblem(ctx, load, i, last, b);
         if (problem) v.push({ prop: "P2.binding", item: i.id, msg: `beyond the horizon: ${problem}` });
+        if (b.kind === "hire") cov.hireTooLate++;
+        const promise = hirePromiseProblem(ctx, load, i, it, last);
+        if (promise) v.push({ prop: "P2.hire", item: i.id, msg: promise });
       }
       continue;
     }
@@ -421,8 +466,11 @@ export function checkSchedule(plan: Plan, sc: Scenario, S: Schedule): { violatio
         cov.leveledMoves++;
         if (refusedOnUnderway(i, it.start - 1)) cov.heldByUnderway++;
         for (let t = ready; t < it.start; t++) if (fitsAt(ctx, load, i, t).ok) v.push({ prop: "P2.earliest", item: i.id, msg: `leveled start ${it.start}, but a run from ${t} fits` });
-        const problem = capacityBindingProblem(ctx, load, i, it.start - 1, b);
+        const problem = blockedBindingProblem(ctx, load, i, it.start - 1, b);
         if (problem) v.push({ prop: "P2.binding", item: i.id, msg: `leveled start ${it.start} after readiness ${ready}: ${problem}` });
+        if (b.kind === "hire") cov.hireWaits++;
+        const promise = hirePromiseProblem(ctx, load, i, it, -1);
+        if (promise) v.push({ prop: "P2.hire", item: i.id, msg: promise });
       }
       // NEAR-TAUTOLOGICAL: fitsAt waits for exactly the carriers binds() names, and binds() is a
       // copy of the engine's own rule. This clause catches a booking that ignores that rule's

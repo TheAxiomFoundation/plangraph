@@ -53,7 +53,7 @@ function deepFreeze<T>(x: T): T {
 function canon(S: Schedule, rename: (id: string) => string = (x) => x): string {
   const r9 = (x: number) => Math.round(x * 1e9) / 1e9;
   const bind = (b: Binding) =>
-    b.kind === "predecessor" ? { kind: b.kind, id: rename(b.id) } : b.kind === "capacity" ? { kind: b.kind, seat: rename(b.seat), carrier: rename(b.carrier) } : b;
+    b.kind === "predecessor" ? { kind: b.kind, id: rename(b.id) } : b.kind === "capacity" || b.kind === "hire" ? { kind: b.kind, seat: rename(b.seat), carrier: rename(b.carrier) } : b;
   const items = S.items
     .map((x) => ({
       id: rename(x.item.id), start: x.start, end: x.end, duration: x.duration, beyond: x.beyond, dropped: !!x.dropped, binding: bind(x.binding),

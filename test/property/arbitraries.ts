@@ -324,7 +324,7 @@ export function compactScenario(sc: Scenario): unknown {
 }
 
 export const bindStr = (b: Binding): string =>
-  b.kind === "predecessor" ? `pred ${b.id}` : b.kind === "capacity" ? `cap ${b.seat}${b.carrier !== b.seat ? `@${b.carrier}` : ""}` : b.kind;
+  b.kind === "predecessor" ? `pred ${b.id}` : b.kind === "capacity" || b.kind === "hire" ? `${b.kind === "capacity" ? "cap" : "hire"} ${b.seat}${b.carrier !== b.seat ? `@${b.carrier}` : ""}` : b.kind;
 
 export const fmtItem = (s: Scheduled): string =>
   s.dropped ? `${s.item.id}:dropped` : s.beyond ? `${s.item.id}:beyond(${bindStr(s.binding)})` : `${s.item.id}:${s.start}-${s.end}(${bindStr(s.binding)})`;
