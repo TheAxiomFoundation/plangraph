@@ -548,6 +548,263 @@ describe("demand profiles", () => {
     expect(findings.filter((f) => f.subject === "a")).toEqual([]);
   });
 
+  it("a dropped item sits at the horizon and is never a slip, whichever month the baseline started it", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [
+        work("p", { duration: 3 }),
+        work("a", { predecessors: [{ id: "p" }] }), // pushed by p: baseline start 3, declared 0
+        work("q", { earliest: 5 }), // baseline start is its declared month
+      ],
+    });
+    const base = schedule(plan, AS_PLANNED);
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a", "q"] });
+    expect(scheduled(plan, "a", AS_PLANNED).start).toBe(3);
+    expect(scheduled(plan, "q", AS_PLANNED).start).toBe(5);
+    for (const id of ["a", "q"]) {
+      expect(s.items.find((it) => it.item.id === id)).toMatchObject({
+        start: 12,
+        end: 12,
+        duration: 0,
+        beyond: true,
+        dropped: true,
+        binding: { kind: "dropped" },
+        carriers: [],
+      });
+    }
+    expect(slips(base, s)).toEqual([]);
+    // Dropped in the baseline and present in the other schedule: added, not moved.
+    expect(slips(s, base)).toEqual([]);
+  });
+
+  it("a dependent of a dropped item still slips beyond the horizon", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [work("p", { duration: 3 }), work("a", { predecessors: [{ id: "p" }] }), work("b", { predecessors: [{ id: "a" }] })],
+    });
+    const base = schedule(plan, AS_PLANNED);
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a"] });
+    expect(slips(base, s)).toEqual([
+      { id: "b", label: "b", months: 12 - 4, beyond: true, binding: { kind: "predecessor", id: "a" } },
+    ]);
+  });
+
+  it("W104 says a dependent of a dropped item never starts, not that capacity is short; W108 keeps the stream", () => {
+    const stream = (id: string, unlockedBy: string) => ({
+      id,
+      label: id,
+      unlockedBy,
+      unit: "units",
+      price: { usd: 10, basis: "A" as const, note: "audit price" },
+      volumeByYear: { units: [120], basis: "A" as const, note: "audit volume" },
+      rampMonths: 0,
+    });
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [
+        work("a"),
+        work("b", { predecessors: [{ id: "a" }] }),
+        work("c", { predecessors: [{ id: "b" }] }),
+        work("long", { duration: 20 }),
+        work("after", { predecessors: [{ id: "long" }] }),
+      ],
+      streams: [stream("from-a", "a"), stream("from-c", "c"), stream("from-long", "long")],
+    });
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a"] });
+    const findings = lintAll(plan, s, ledger(plan, s));
+    const w104 = (id: string) => findings.find((f) => f.code === "W104" && f.subject === id)!;
+    const w108 = (id: string) => findings.find((f) => f.code === "W108" && f.subject === id)!;
+
+    expect(findings.filter((f) => f.subject === "a")).toEqual([]);
+    expect(w104("b")).toMatchObject({
+      severity: "warn",
+      message: '"b" never starts: this scenario drops "a", which it depends on.',
+      hint: 'Drop "b" from the scenario as well, or keep "a".',
+    });
+    expect(w104("c")).toMatchObject({
+      severity: "warn",
+      message: '"c" never starts: this scenario drops "a", which it depends on through "b".',
+      hint: 'Drop "c" from the scenario as well, or keep "a".',
+    });
+    expect(w108("from-a").hint).toBe('Its item "a" is dropped in this scenario.');
+    expect(w108("from-c").hint).toBe('Its item "c" never starts: this scenario drops "a", which it depends on.');
+
+    // An item beyond the horizon for any other reason keeps the capacity wording.
+    expect(w104("long")).toMatchObject({
+      message: '"long" does not fit inside the horizon: its run would extend past the horizon.',
+      hint: "Lower the effort assumption, add a seat, or drop the item.",
+    });
+    expect(w104("after").message).toBe('"after" does not fit inside the horizon: "long" never finishes.');
+    expect(w108("from-long").hint).toBe('Its item "long" does not finish by 2027-12.');
+    // One W104 per item, and none for the dropped item: no second, contradictory finding.
+    expect(findings.filter((f) => f.code === "W104").map((f) => f.subject)).toEqual(["b", "c", "long", "after"]);
+  });
+
+  it("W104 and W108 name every drop upstream, whichever predecessor sorts first, and anything else that does not fit", () => {
+    const stream = (id: string, unlockedBy: string) => ({
+      id,
+      label: id,
+      unlockedBy,
+      unit: "units",
+      price: { usd: 10, basis: "A" as const, note: "audit price" },
+      volumeByYear: { units: [120], basis: "A" as const, note: "audit volume" },
+      rampMonths: 0,
+    });
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [
+        work("a", { label: "Pilot A" }),
+        work("z", { label: "Pilot Z" }),
+        work("long", { label: "Long build", duration: 20 }),
+        work("long2", { label: "Second long build", duration: 15 }),
+        work("w1", { label: "W1", predecessors: [{ id: "a" }, { id: "long" }] }), // the drop sorts first
+        work("w2", { label: "W2", predecessors: [{ id: "long" }, { id: "z" }] }), // the drop sorts last
+        work("w3", { label: "W3", predecessors: [{ id: "a" }, { id: "z" }] }), // two drops
+        work("w4", { label: "W4", predecessors: [{ id: "w1" }, { id: "w3" }] }), // a diamond onto both drops
+        work("w5", { label: "W5", predecessors: [{ id: "long2" }, { id: "a" }, { id: "long" }] }), // declared out of id order
+        work("after", { label: "After", predecessors: [{ id: "long" }] }), // no drop upstream
+      ],
+      streams: [stream("from-w2", "w2"), stream("from-w3", "w3")],
+    });
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["a", "z"] });
+    expect(s.items.find((it) => it.item.id === "w2")!.binding).toEqual({ kind: "predecessor", id: "long" });
+    const findings = lintAll(plan, s, ledger(plan, s));
+
+    // Labels in the message, ids in the hint (dropItems takes ids).
+    expect(findings.filter((f) => f.code === "W104").map(({ subject, message, hint }) => ({ subject, message, hint }))).toEqual([
+      {
+        subject: "long",
+        message: '"Long build" does not fit inside the horizon: its run would extend past the horizon.',
+        hint: "Lower the effort assumption, add a seat, or drop the item.",
+      },
+      {
+        subject: "long2",
+        message: '"Second long build" does not fit inside the horizon: its run would extend past the horizon.',
+        hint: "Lower the effort assumption, add a seat, or drop the item.",
+      },
+      {
+        subject: "w1",
+        message: '"W1" never starts: this scenario drops "Pilot A", which it depends on, and "Long build" does not fit inside the horizon.',
+        hint: 'Drop "w1" from the scenario as well, or keep "a" and fit "long" inside the horizon.',
+      },
+      {
+        subject: "w2",
+        message: '"W2" never starts: this scenario drops "Pilot Z", which it depends on, and "Long build" does not fit inside the horizon.',
+        hint: 'Drop "w2" from the scenario as well, or keep "z" and fit "long" inside the horizon.',
+      },
+      {
+        subject: "w3",
+        message: '"W3" never starts: this scenario drops "Pilot A" and "Pilot Z", which it depends on.',
+        hint: 'Drop "w3" from the scenario as well, or keep "a" and "z".',
+      },
+      {
+        subject: "w4",
+        message: '"W4" never starts: this scenario drops "Pilot A" and "Pilot Z", which it depends on, and "Long build" does not fit inside the horizon.',
+        hint: 'Drop "w4" from the scenario as well, or keep "a" and "z" and fit "long" inside the horizon.',
+      },
+      {
+        subject: "w5",
+        message: '"W5" never starts: this scenario drops "Pilot A", which it depends on, and "Long build" and "Second long build" do not fit inside the horizon.',
+        hint: 'Drop "w5" from the scenario as well, or keep "a" and fit "long" and "long2" inside the horizon.',
+      },
+      {
+        subject: "after",
+        message: '"After" does not fit inside the horizon: "Long build" never finishes.',
+        hint: "Lower the effort assumption, add a seat, or drop the item.",
+      },
+    ]);
+    const w108 = (id: string) => findings.find((f) => f.code === "W108" && f.subject === id)!;
+    expect(w108("from-w2").hint).toBe('Its item "w2" never starts: this scenario drops "z", which it depends on, and "long" does not fit inside the horizon.');
+    expect(w108("from-w3").hint).toBe('Its item "w3" never starts: this scenario drops "a" and "z", which it depends on.');
+  });
+
+  it("W104 and W108 trace through a drop to what would still hold it if kept, unless it is underway", () => {
+    const stream = (id: string, unlockedBy: string) => ({
+      id,
+      label: id,
+      unlockedBy,
+      unit: "units",
+      price: { usd: 10, basis: "A" as const, note: "audit price" },
+      volumeByYear: { units: [120], basis: "A" as const, note: "audit volume" },
+      rampMonths: 0,
+    });
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+      items: [
+        work("pilot", { label: "Pilot" }),
+        work("phase2", { label: "Phase 2", predecessors: [{ id: "pilot" }] }),
+        work("rollout", { label: "Rollout", predecessors: [{ id: "phase2" }] }), // a drop behind a drop
+        work("setup", { label: "Setup" }),
+        work("big", { label: "Big build", duration: 20, predecessors: [{ id: "setup" }] }),
+        work("mid", { label: "Mid", predecessors: [{ id: "big" }] }),
+        work("after", { label: "After", predecessors: [{ id: "mid" }] }), // an item that does not fit, behind a drop
+        work("legacy", { label: "Legacy", duration: 2, underway: true, predecessors: [{ id: "big" }] }),
+        work("user", { label: "User", predecessors: [{ id: "legacy" }] }), // kept, underway work waits for nothing
+        work("run", { label: "Run", duration: 20, underway: true }),
+        work("tail", { label: "Tail", predecessors: [{ id: "run" }, { id: "pilot" }] }),
+        work("a-wrap", { label: "A wrap", predecessors: [{ id: "pilot" }] }),
+        work("direct", { label: "Direct", predecessors: [{ id: "pilot" }, { id: "a-wrap" }] }), // binding "a-wrap", drop also direct
+        work("indirect", { label: "Indirect", predecessors: [{ id: "a-wrap" }] }),
+      ],
+      streams: [stream("from-phase2", "phase2"), stream("from-rollout", "rollout"), stream("from-after", "after")],
+    });
+    const s = schedule(plan, { ...AS_PLANNED, id: "d", dropItems: ["pilot", "phase2", "mid", "legacy"] });
+    expect(s.items.find((it) => it.item.id === "direct")!.binding).toEqual({ kind: "predecessor", id: "a-wrap" });
+    const findings = lintAll(plan, s, ledger(plan, s));
+
+    expect(findings.filter((f) => f.code === "W104").map(({ subject, message, hint }) => ({ subject, message, hint }))).toEqual([
+      {
+        subject: "rollout",
+        message: '"Rollout" never starts: this scenario drops "Phase 2" and "Pilot", which it depends on.',
+        hint: 'Drop "rollout" from the scenario as well, or keep "phase2" and "pilot".',
+      },
+      {
+        subject: "big",
+        message: '"Big build" does not fit inside the horizon: its run would extend past the horizon.',
+        hint: "Lower the effort assumption, add a seat, or drop the item.",
+      },
+      {
+        subject: "after",
+        message: '"After" never starts: this scenario drops "Mid", which it depends on, and "Big build" does not fit inside the horizon.',
+        hint: 'Drop "after" from the scenario as well, or keep "mid" and fit "big" inside the horizon.',
+      },
+      {
+        subject: "user",
+        message: '"User" never starts: this scenario drops "Legacy", which it depends on.',
+        hint: 'Drop "user" from the scenario as well, or keep "legacy".',
+      },
+      {
+        subject: "run",
+        message: '"Run" does not fit inside the horizon: its run would extend past the horizon.',
+        hint: "Lower the effort assumption, add a seat, or drop the item.",
+      },
+      {
+        subject: "tail",
+        message: '"Tail" never starts: this scenario drops "Pilot", which it depends on, and "Run" does not fit inside the horizon.',
+        hint: 'Drop "tail" from the scenario as well, or keep "pilot" and fit "run" inside the horizon.',
+      },
+      {
+        subject: "a-wrap",
+        message: '"A wrap" never starts: this scenario drops "Pilot", which it depends on.',
+        hint: 'Drop "a-wrap" from the scenario as well, or keep "pilot".',
+      },
+      {
+        subject: "direct",
+        message: '"Direct" never starts: this scenario drops "Pilot", which it depends on.',
+        hint: 'Drop "direct" from the scenario as well, or keep "pilot".',
+      },
+      {
+        subject: "indirect",
+        message: '"Indirect" never starts: this scenario drops "Pilot", which it depends on through "A wrap".',
+        hint: 'Drop "indirect" from the scenario as well, or keep "pilot".',
+      },
+    ]);
+    const w108 = (id: string) => findings.find((f) => f.code === "W108" && f.subject === id)!;
+    expect(w108("from-phase2").hint).toBe('Its item "phase2" is dropped in this scenario.');
+    expect(w108("from-rollout").hint).toBe('Its item "rollout" never starts: this scenario drops "phase2" and "pilot", which it depends on.');
+    expect(w108("from-after").hint).toBe('Its item "after" never starts: this scenario drops "mid", which it depends on, and "big" does not fit inside the horizon.');
+  });
+
   it("priority books ahead of the id order inside a circle", () => {
     const plan = fixture({
       calendar: { startYear: 2027, startMonth: 1, horizonMonths: 6, fundingYearStartMonth: 0 },
