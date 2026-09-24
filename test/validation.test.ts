@@ -79,6 +79,10 @@ describe("complete plan parsing", () => {
       ["plan.funding[0].byMonth[0]", (raw) => (raw.funding[0].byMonth = Array(1))],
       ["plan.nonLabor[0]", (raw) => (raw.nonLabor = Array(1))],
       ["plan.scenarios[0]", (raw) => (raw.scenarios = Array(1))],
+      ["plan.scenarios[0].hireDelay.eng[0]", (raw) => (raw.scenarios[0].hireDelay = { eng: Array(1) })],
+      ["plan.scenarios[0].dropHires.eng", (raw) => (raw.scenarios[0].dropHires = { eng: Array(1) })],
+      ["plan.scenarios[0].dropItems[0]", (raw) => (raw.scenarios[0].dropItems = Array(1))],
+      ["plan.scenarios[0].dropSeats[0]", (raw) => (raw.scenarios[0].dropSeats = Array(1))],
       ["plan.reference.nonLaborShare[0]", (raw) => (raw.reference = { headcountByYear: [1], gross: 1, nonLaborShare: Array(2), note: "source" })],
     ];
     for (const [path, mutate] of cases) expectRejectedAt(mutate, path);
@@ -108,6 +112,90 @@ describe("complete plan parsing", () => {
     const negativeDelay = rawStudio();
     negativeDelay.scenarios[0].hireDelay = { eng: -2 };
     expect(parsePlan(negativeDelay).scenarios?.[0].hireDelay?.eng).toBe(-2);
+  });
+
+  it("rejects scenario overrides the scheduler would ignore, at their exact paths", () => {
+    const problems = (mutate: (raw: Record<string, any>) => void): string[] => {
+      const raw = rawStudio();
+      mutate(raw);
+      try {
+        parsePlan(raw);
+        return [];
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlanParseError);
+        return (error as PlanParseError).problems;
+      }
+    };
+
+    // The engineer role has two hires, so a third delay has nothing to delay.
+    expect(rawStudio().seats[1]).toMatchObject({ id: "eng", hireMonths: [2, 14] });
+    expect(problems((raw) => (raw.scenarios[0].hireDelay = { eng: [1, 2, 3] }))).toEqual([
+      "plan.scenarios[0].hireDelay.eng: must have no more entries than the seat's hireMonths",
+    ]);
+    expect(problems((raw) => (raw.scenarios[0].hireDelay = { eng: [1, 0.5] }))).toEqual([
+      "plan.scenarios[0].hireDelay.eng[1]: must be an integer",
+    ]);
+
+    // A dropped role is never hired, so a delay or a dropped hire on it would be ignored.
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropSeats: ["eng"], hireDelay: { eng: 2 } }))).toEqual([
+      "plan.scenarios[0].hireDelay.eng: must not name a seat in dropSeats",
+    ]);
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropSeats: ["eng"], dropHires: { eng: [0] } }))).toEqual([
+      "plan.scenarios[0].dropHires.eng: must not name a seat in dropSeats",
+    ]);
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropSeats: ["eng"], hireDelay: { eng: [1] }, dropHires: { eng: [1] } }))).toEqual([
+      "plan.scenarios[0].hireDelay.eng: must not name a seat in dropSeats",
+      "plan.scenarios[0].dropHires.eng: must not name a seat in dropSeats",
+    ]);
+
+    // A dropped hire takes no delay of its own, either way; a 0 keeps the list aligned.
+    for (const delay of [5, -1]) {
+      expect(problems((raw) => Object.assign(raw.scenarios[0], { dropHires: { eng: [0] }, hireDelay: { eng: [delay, 0] } }))).toEqual([
+        "plan.scenarios[0].hireDelay.eng[0]: must be 0 for a hire in dropHires",
+      ]);
+    }
+    // Nor does a role whose every hire is dropped take a whole-role delay.
+    for (const delay of [3, -1]) {
+      expect(problems((raw) => Object.assign(raw.scenarios[0], { dropHires: { eng: [1, 0] }, hireDelay: { eng: delay } }))).toEqual([
+        "plan.scenarios[0].hireDelay.eng: must be 0 when dropHires drops every hire",
+      ]);
+    }
+
+    // A malformed sibling is reported where it is, once, not as a crash or a conflict.
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropHires: { eng: 0 }, hireDelay: { eng: [1] } }))).toEqual([
+      "plan.scenarios[0].dropHires.eng: must list indices into the seat's hireMonths",
+    ]);
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropHires: null, hireDelay: { eng: 1 } }))).toEqual([
+      "plan.scenarios[0].dropHires: must be an object",
+    ]);
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropSeats: "eng", hireDelay: { eng: 1 } }))).toEqual([
+      "plan.scenarios[0].dropSeats: must be an array of seat ids",
+    ]);
+    // An unknown seat is one problem, whatever shape its delay takes; a dropped seat with too
+    // long a list is two.
+    for (const delay of [1, [1]]) {
+      expect(problems((raw) => (raw.scenarios[0].hireDelay = { nobody: delay }))).toEqual(["plan.scenarios[0].hireDelay.nobody: must name a known seat"]);
+    }
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropSeats: ["eng"], hireDelay: { eng: [1, 2, 3] } }))).toEqual([
+      "plan.scenarios[0].hireDelay.eng: must not name a seat in dropSeats",
+      "plan.scenarios[0].hireDelay.eng: must have no more entries than the seat's hireMonths",
+    ]);
+
+    // Still accepted: a shorter list (missing entries are 0), a full one with a negative
+    // delay, a placeholder 0 for a dropped hire, a whole-role delay beside dropped hires
+    // (a repeated index drops one hire, so one is left to delay), a 0 whole-role delay on a
+    // role with every hire dropped, and overrides on a seat other than the dropped one.
+    for (const scenario of [
+      { hireDelay: { eng: [3] } },
+      { hireDelay: { eng: [3, -20] } },
+      { dropHires: { eng: [0] }, hireDelay: { eng: [0, 3] } },
+      { dropHires: { eng: [0] }, hireDelay: { eng: 3 } },
+      { dropHires: { eng: [0, 0] }, hireDelay: { eng: 3 } },
+      { dropHires: { eng: [0, 1] }, hireDelay: { eng: 0 } },
+      { dropSeats: ["design"], hireDelay: { eng: 2 }, dropHires: { sales: [0] } },
+    ]) {
+      expect(problems((raw) => Object.assign(raw.scenarios[0], scenario))).toEqual([]);
+    }
   });
 
   it("validates the complete reference shape and its domains", () => {

@@ -108,7 +108,7 @@ projection of the same.
 | E006 | A seat with no hires, non-positive capacity, an unknown or looping fallback, or the reserved id `external`. |
 | E007 | An item in a circle the plan does not list. |
 | W101 | A seat over capacity for the policy's months, or by the policy's FTE in any month. |
-| W102 | A hire whose role stays under the policy's share of its capacity for the policy's months; the measured share is stated. |
+| W102 | A hire declared after month 0 whose role stays under the policy's share of its capacity for the policy's months in a row from the month the hire lands in the scenario; the peak share over that stretch is stated. A hire declared at month 0 is in place before the plan and exempt wherever a scenario's delay moves it; a later hire that a negative delay pulls onto month 0 is still checked. |
 | W103 | An item starting well before its seat arrives: which hired seat carries it meanwhile, or that nobody does. |
 | W104 | An item starting late against its declared month, or never fitting, with the binding cause. |
 | W105 | Cash going negative: first month and trough. |
