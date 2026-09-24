@@ -1,12 +1,13 @@
 // The scheduler: a serial schedule-generation scheme over the plan graph.
 //
-// Items are taken in priority order (circle, then declared start, then id), predecessors
-// always first. Each starts at the latest of: its declared earliest month; every
-// predecessor's end plus lag (a standing predecessor counts from its start plus one, since
-// it never ends); and, when the scenario levels capacity, the first month from which every
-// carrier it needs has room for the whole run. Demands are resolved to carriers month by
-// month and aggregated per carrier before they are compared with capacity, so two demands
-// that land on the same person count together.
+// Underway items are taken first, at their declared starts, so leveling counts their load
+// wherever it waits for room. Planned items follow in priority order (circle, then the item's
+// priority, then declared start, then id), predecessors always first. Each starts at the latest
+// of: its declared earliest month; every predecessor's end plus lag (a standing predecessor
+// counts from its start plus one, since it never ends); and, when the scenario levels
+// capacity, the first month from which every carrier it needs has room for the whole run.
+// Demands are resolved to carriers month by month and aggregated per carrier before they are
+// compared with capacity, so two demands that land on the same person count together.
 //
 // A finite item must fit entirely inside the horizon to be scheduled; one that cannot is
 // beyond the horizon: it books nothing, unlocks nothing, and takes its dependents with it.
@@ -164,7 +165,11 @@ function order(items: WorkItem[], circles: string[]): WorkItem[] {
     out.push(i);
   };
   for (const i of [...items].sort(cmp)) visit(i);
-  return out;
+  // Underway items book first. Their starts are facts: they wait for nothing, not even their
+  // predecessors, so booking them ahead breaks no dependency, and leveling then counts their
+  // load wherever it waits for room. The walk above still covers every item, so a
+  // cycle or an unknown predecessor through underway work is still caught.
+  return [...out.filter((i) => i.underway), ...out.filter((i) => !i.underway)];
 }
 
 export function schedule(plan: Plan, scenario: Scenario): Schedule {

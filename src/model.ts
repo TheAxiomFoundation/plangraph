@@ -107,7 +107,7 @@ export interface WorkItem {
   id: string;
   lane: string;
   label: string;
-  /** Priority group; the plan lists circles in booking order. Must be one of plan.circles. */
+  /** Priority group; the plan lists circles in booking order for planned work (underway items book first). Must be one of plan.circles. */
   circle: Circle;
   /** The accountable seat. Defaults to the first demand's seat; must be one of the demands. */
   owner?: SeatId;
@@ -119,9 +119,9 @@ export interface WorkItem {
   predecessors: Predecessor[];
   /** One demand per seat. */
   demands: Demand[];
-  /** True when the item has already begun: its start is a fact, not a decision. */
+  /** True when the item has already begun: its start is a fact, not a decision. It books before any planned item, so wherever leveling waits for room, its load is already counted. */
   underway: boolean;
-  /** Booking order inside a circle when leveling: lower first, default 0. Ties fall to the earliest start, then the id. */
+  /** Booking order of planned work inside a circle when leveling: lower first, default 0. Ties fall to the earliest start, then the id. Underway items book first, whatever their priority. */
   priority?: number;
   /** Non-labor burn per month while the item runs, if any. */
   burnPerMonth?: { usd: number; basis: Basis; note: string };
@@ -246,7 +246,7 @@ export interface Plan {
   levelOn?: "all" | "owner";
   name: string;
   calendar: Calendar;
-  /** Circles in booking priority: the first books capacity first when leveling. Every item's circle must be listed. */
+  /** Circles in booking priority: planned work in the first books capacity first when leveling, after all underway work. Every item's circle must be listed. */
   circles: Circle[];
   /** What the plan is checked against, when a source model exists. */
   reference?: Reference;

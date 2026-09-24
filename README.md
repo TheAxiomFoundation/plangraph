@@ -69,9 +69,11 @@ dates and scenario scales do not. Months are integers; there is no partial-month
 
 ## Scheduling
 
-The scheduler takes items in priority order (circle, then declared start, then id),
-predecessors first, which can pull a lower-priority predecessor ahead of unrelated work. Ids
-break ties for scarce capacity. It is a serial heuristic, not an optimizer.
+The scheduler books underway items first: their starts are facts, so wherever leveling
+waits for room, their load is already counted. It then takes planned items in priority order
+(circle, then `priority`, then declared start, then id), predecessors first, which can pull a
+lower-priority predecessor ahead of unrelated work. Ids break ties for scarce capacity. It is
+a serial heuristic, not an optimizer.
 
 Each planned item starts at the latest of its declared month, its predecessors' ends (a
 standing predecessor releases its successors one month after it starts), and, when leveling,
