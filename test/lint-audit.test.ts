@@ -60,6 +60,15 @@ const findings = (plan: Plan): Finding[] => {
 const finding = (plan: Plan, code: string, subject?: string): Finding | undefined =>
   findings(plan).find((item) => item.code === code && (subject === undefined || item.subject === subject));
 
+/** One engineer role with nothing to do until a one-month item arrives in `workAt`. */
+const idleUntil = (workAt: number, x: Partial<SeatDef>): Plan =>
+  fixture({ seats: [role("x", x)], items: [work("later", { earliest: workAt })] });
+
+const idleMessages = (plan: Plan, over: Partial<Scenario> = {}): string[] => {
+  const s = schedule(plan, { ...AS_PLANNED, id: "moved", ...over });
+  return lintSchedule(plan, s, ledger(plan, s)).filter((f) => f.code === "W102").map((f) => f.message);
+};
+
 describe("defensive lint audit", () => {
   it("D8 uses actual capacity for W102 and states the measured utilization", () => {
     const idlePlan = (fte: number): Plan =>
@@ -117,6 +126,40 @@ describe("defensive lint audit", () => {
     expect(lintSchedule(dropped, unindexed, ledger(dropped, s)).filter((f) => f.code === "W102").map((f) => f.message)).toEqual([
       "x hired 2027-03 peaks at 0% load for its first 4 months.",
     ]);
+  });
+
+  it("W102 checks hires in the order they land, not the order hireMonths declares them", () => {
+    // The role sits idle from month 2 until work arrives in month 9, whichever way the hires
+    // are listed: the finding names the month-2 hire and all seven idle months, not the
+    // month-6 hire and the last three.
+    const expected = ["x hired 2027-03 peaks at 0% load for its first 7 months."];
+    expect(idleMessages(idleUntil(9, { hireMonths: [2, 6] }))).toEqual(expected);
+    const unsorted = idleUntil(9, { hireMonths: [6, 2] });
+    expect(idleMessages(unsorted)).toEqual(expected);
+
+    // A schedule without hireIndex falls back to landing months and walks them in order too.
+    const s = schedule(unsorted, AS_PLANNED);
+    const unindexed = { ...s, hireIndex: undefined } as unknown as typeof s;
+    expect(lintSchedule(unsorted, unindexed, ledger(unsorted, s)).filter((f) => f.code === "W102").map((f) => f.message)).toEqual(expected);
+  });
+
+  it("W102 checks hires in the order a per-hire delay lands them", () => {
+    // Declared in months 2 and 6; delaying the first by six months lands it after the second.
+    // The role then sits idle from month 6 until work arrives in month 11.
+    const plan = idleUntil(11, { hireMonths: [2, 6] });
+    const hireDelay = { x: [6, 0] };
+    expect(schedule(plan, { ...AS_PLANNED, hireDelay }).hires.x).toEqual([8, 6]);
+    expect(idleMessages(plan, { hireDelay })).toEqual(["x hired 2027-07 peaks at 0% load for its first 5 months."]);
+  });
+
+  it("W102 reports one finding for hires that land in the same month, and an exempt one shields none", () => {
+    // Declared in months 0, 6 and 3; delaying the month-0 hire by three lands it beside the
+    // month-3 hire. It stays exempt; the month-3 hire is checked before the month-6 one.
+    expect(idleMessages(idleUntil(10, { hireMonths: [0, 6, 3] }), { hireDelay: { x: [3, 0, 0] } })).toEqual([
+      "x hired 2027-04 peaks at 0% load for its first 7 months.",
+    ]);
+    // Two checked hires that land together ahead of an earlier-declared one: one finding.
+    expect(idleMessages(idleUntil(9, { hireMonths: [6, 2, 2] }))).toEqual(["x hired 2027-03 peaks at 0% load for its first 7 months."]);
   });
 
   it("D8 triggers W101 on a material two-month peak and honors both overload thresholds", () => {

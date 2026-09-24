@@ -161,16 +161,22 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   // Whether a hire was in place before the plan is the plan's fact, not the scenario's: a
   // hire declared at month 0 is exempt wherever a delay moves it, and a later hire that a
   // negative delay pulls onto month 0 is still checked. A schedule without hireIndex cannot
-  // say which declared hire is which, so it falls back to the month the hire lands.
+  // say which declared hire is which, so it falls back to the month the hire lands. Hires are
+  // checked in the order they land, not the order they are declared, so a role's one finding
+  // names its earliest-landing idle hire and counts the idle months from there.
   const declaredHires = new Map(plan.seats.map((seat) => [seat.id, seat.hireMonths]));
   for (const load of s.loads) {
     const hires = s.hires[load.seat] ?? [];
     const index = s.hireIndex?.[load.seat];
     const declared = declaredHires.get(load.seat) ?? [];
-    for (let j = 0; j < hires.length; j++) {
+    const checked = [...hires.keys()]
+      .filter((j) => {
+        const k = index?.[j];
+        return (k === undefined ? hires[j] : declared[k] ?? hires[j]) !== 0;
+      })
+      .sort((a, b) => hires[a] - hires[b] || a - b);
+    for (const j of checked) {
       const h = hires[j];
-      const k = index?.[j];
-      if ((k === undefined ? h : declared[k] ?? h) === 0) continue;
       let idle = 0;
       let peakShare = 0;
       for (let m = h; m < H; m++) {
