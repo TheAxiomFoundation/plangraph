@@ -28,7 +28,7 @@ export type Binding =
 export interface Scheduled {
   item: WorkItem;
   start: number;
-  /** Exclusive. Equal to the horizon for standing items and for items beyond it, except a dropped item, whose start and end are both its declared month. */
+  /** Exclusive. Equal to the horizon for standing items and for items beyond it. */
   end: number;
   /** Months actually scheduled: the item's duration, or the horizon minus start for standing items. */
   duration: number;
