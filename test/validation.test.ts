@@ -180,6 +180,11 @@ describe("complete plan parsing", () => {
       "plan.scenarios[0].hireDelay.eng: must not name a seat in dropSeats",
       "plan.scenarios[0].hireDelay.eng: must have no more entries than the seat's hireMonths",
     ]);
+    // An empty id is not a seat, so it names no dropped seat either.
+    expect(problems((raw) => Object.assign(raw.scenarios[0], { dropSeats: [""], hireDelay: { "": 1 } }))).toEqual([
+      "plan.scenarios[0].hireDelay.: must name a known seat",
+      "plan.scenarios[0].dropSeats[0]: must name a known seat",
+    ]);
 
     // Still accepted: a shorter list (missing entries are 0), a full one with a negative
     // delay, a placeholder 0 for a dropped hire, a whole-role delay beside dropped hires
