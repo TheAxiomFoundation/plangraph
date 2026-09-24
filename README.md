@@ -84,6 +84,12 @@ cannot finish inside the horizon, underway or not, goes beyond it: it books noth
 unlocks nothing, and takes its dependents with it. Standing work runs from its scheduled
 start to the horizon.
 
+An item beyond the horizon says why in its binding, and W104 repeats it: a predecessor that
+never finishes; the horizon, when the run is longer than the months left after its declared
+start and its predecessors; or, when leveling pushed it out, the seat that last had no room
+for it. An item the scenario drops (`dropItems`) has binding `dropped`, and W104 leaves it
+out.
+
 ## Funding clock and reports
 
 A funding year is twelve complete months from `calendar.fundingYearStartMonth`. Reports
@@ -122,6 +128,11 @@ projection of the same.
 
 Thresholds come from `lintPolicy(plan)`; a plan sets its own under `lint`. There are no
 W113 or W114.
+
+A sum of FTE or dollars can differ in its last bit with the order it was added up, so the
+thresholds on sums and on shares of them (W101's peak, W102's share, W106's share, W111's
+ratio, W112's share, W115 and W116) allow 1e-9 of slack, as the scheduler does: a value
+exactly at a threshold counts as at it, whatever the order.
 
 ## Compared with TaskJuggler
 
