@@ -178,6 +178,13 @@ describe("defensive CLI audit", () => {
     expect(normalizedLine(line!)).toBe("Slips vs baseline B beyond horizon");
   });
 
+  it("prints a slip earlier than the baseline with its own sign", () => {
+    const text = run("check", writePlan(chainPlan()), "--scenario", "fast");
+    expect(text.status).toBe(0);
+    const line = physicalLines(text.stdout).find((l) => l.trim().startsWith("Slips vs baseline"));
+    expect(normalizedLine(line!)).toBe("Slips vs baseline A -2 · B -2");
+  });
+
   it("D5 prints one line per structural E finding before any normal report", () => {
     const raw = basePlan();
     raw.items = [
