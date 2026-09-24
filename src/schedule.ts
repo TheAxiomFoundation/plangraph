@@ -201,6 +201,13 @@ function order(items: WorkItem[], circles: string[]): WorkItem[] {
   return [...out.filter((i) => i.underway), ...out.filter((i) => !i.underway)];
 }
 
+/**
+ * The order the scheduler books items in, by id: underway items first, then planned items in
+ * priority order, each after the predecessors it pulls ahead of itself. It depends on the plan
+ * alone, so it is the same in every scenario.
+ */
+export const bookingOrder = (plan: Plan): string[] => order(plan.items, plan.circles).map((i) => i.id);
+
 export function schedule(plan: Plan, scenario: Scenario): Schedule {
   const H = plan.calendar.horizonMonths;
   const seatDefs = new Map(plan.seats.map((s) => [s.id, s]));

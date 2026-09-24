@@ -4,8 +4,8 @@
 // says what to do, so an agent editing nodes gets the same feedback a reviewer would give.
 
 import { atFundingYearEnd, byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
-import { lintPolicy, monthLabel, ownerOf, type Plan, type SeatId } from "./model.js";
-import { carrierFor, overloads, seatsHired, type Schedule, type Scheduled } from "./schedule.js";
+import { lintPolicy, monthLabel, ownerOf, type Plan, type Scenario, type SeatId } from "./model.js";
+import { bookingOrder, carrierFor, effectiveHiring, overloads, schedule, seatsHired, type Schedule, type Scheduled } from "./schedule.js";
 
 export type Severity = "error" | "warn" | "info";
 
@@ -463,6 +463,126 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
+  return out;
+}
+
+/**
+ * Whether scenario `b` schedules the plan against no more room and no earlier releases than
+ * scenario `a`: it levels whenever `a` does, scales effort and duration at least as much,
+ * drops the same items, and keeps each hire no earlier than `a` (or drops it). A later or
+ * dropped hire counts only on a role with `fallback: null`, or when the role's first hire does
+ * not move: fallback is all-or-nothing, so until a role's first hire its work goes to its
+ * fallback, which can have more room than the role, and "external" has no limit.
+ * Funding and volume overrides do not touch the schedule and are ignored.
+ */
+export function tightens(plan: Plan, a: Scenario, b: Scenario): boolean {
+  if (a.level && !b.level) return false;
+  if ((b.effortScale ?? 1) < (a.effortScale ?? 1)) return false;
+  if ((b.durationScale ?? 1) < (a.durationScale ?? 1)) return false;
+  const da = new Set(a.dropItems ?? []);
+  const db = new Set(b.dropItems ?? []);
+  if (da.size !== db.size || [...da].some((id) => !db.has(id))) return false;
+  const ha = effectiveHiring(plan, a);
+  const hb = effectiveHiring(plan, b);
+  for (const seat of plan.seats) {
+    const at = new Map(ha[seat.id].index.map((k, j) => [k, ha[seat.id].months[j]]));
+    const bt = new Map(hb[seat.id].index.map((k, j) => [k, hb[seat.id].months[j]]));
+    for (const [k, m] of bt) {
+      const was = at.get(k);
+      if (was === undefined || m < was) return false;
+    }
+    if (seat.fallback !== null && Math.min(...at.values()) !== Math.min(...bt.values())) return false;
+  }
+  return true;
+}
+
+/**
+ * The scenarios `b` tightens most closely: each one `b` tightens, schedules differently from,
+ * and reaches through no other scenario in the list. Of scenarios that schedule alike (the
+ * same items and bookings), the first listed stands for the rest. `scheduleOf` lets a caller
+ * that has the schedules already pass them in.
+ */
+export function tightenedFrom(plan: Plan, scenarios: Scenario[], b: Scenario, scheduleOf: (sc: Scenario) => Schedule = (sc) => schedule(plan, sc)): Scenario[] {
+  // Two scenarios schedule alike when their items and bookings match, whatever their inputs.
+  const shape = (sc: Scenario) => {
+    const s = scheduleOf(sc);
+    return JSON.stringify([s.items.map((x) => [x.item.id, x.start, x.end, x.beyond, !!x.dropped]), s.bookings]);
+  };
+  const seen = new Set([shape(b)]);
+  const looser = scenarios.filter((a) => {
+    if (!tightens(plan, a, b)) return false;
+    const k = shape(a);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return looser.filter((a) => !looser.some((c) => c !== a && tightens(plan, a, c)));
+}
+
+/**
+ * W117: an item that starts earlier, or fits inside the horizon only, in a schedule whose
+ * scenario only tightens another's (see `tightens`). Leveling is a serial heuristic: work the
+ * tighter scenario delays can leave room that a later item in the order takes, so a comparison
+ * of the two would credit the tightening with a gain it did not make.
+ */
+export function lintSubstitutions(plan: Plan, s: Schedule, looser: Schedule): Finding[] {
+  const out: Finding[] = [];
+  const label = (m: number) => monthLabel(plan.calendar, m);
+  const before = new Map(looser.items.map((x) => [x.item.id, x]));
+  const rank = new Map(bookingOrder(plan).map((id, k) => [id, k]));
+  /** FTE on a carrier by item and month over [from, to), from items booked before `subject`. */
+  const loadOn = (sched: Schedule, carrier: string, from: number, to: number, subject: string) => {
+    const by = new Map<string, number>();
+    for (const b of sched.bookings) {
+      if (b.carrier !== carrier || b.month < from || b.month >= to || rank.get(b.item)! >= rank.get(subject)!) continue;
+      const key = `${b.item}\u0000${b.month}`;
+      by.set(key, (by.get(key) ?? 0) + b.fte);
+    }
+    return by;
+  };
+  for (const it of s.items) {
+    const was = before.get(it.item.id)!;
+    if (it.beyond || it.dropped || was.dropped || (!was.beyond && was.start <= it.start)) continue;
+    const name = `"${looser.scenario.name}"`;
+    const message = was.beyond
+      ? `"${it.item.label}" fits inside the horizon here, from ${label(it.start)}, but not under ${name}, though this scenario only tightens that one.`
+      : `"${it.item.label}" starts ${was.start - it.start} month${was.start - it.start === 1 ? "" : "s"} earlier here (${label(it.start)}) than under ${name} (${label(was.start)}), though this scenario only tightens that one.`;
+    // Where the looser schedule held it: the seat that had no room, and, of the work booked
+    // before it (all it had to fit beside when it was booked), what put less load there, month
+    // by month, over the months it moved into.
+    let where = "";
+    if (was.binding.kind === "capacity" || was.binding.kind === "hire") {
+      const carrier = was.binding.carrier;
+      const to = was.beyond ? it.end : Math.min(was.start, it.end);
+      const a = loadOn(looser, carrier, it.start, to, it.item.id);
+      const b = loadOn(s, carrier, it.start, to, it.item.id);
+      const less = new Map<string, number>();
+      for (const [key, fte] of a) {
+        const id = key.split("\u0000")[0];
+        less.set(id, (less.get(id) ?? 0) + Math.max(0, fte - (b.get(key) ?? 0)));
+      }
+      const freed = [...less]
+        .map(([id, x]) => ({ id, less: x }))
+        .filter((x) => x.less > 1e-9)
+        .sort((x, y) => y.less - x.less || (x.id < y.id ? -1 : 1))
+        .slice(0, 3)
+        .map((x) => `"${before.get(x.id)!.item.label}"`);
+      const who = freed.length < 2 ? freed.join("") : `${freed.slice(0, -1).join(", ")} and ${freed[freed.length - 1]}`;
+      const when = to - 1 === it.start ? `in ${label(it.start)}` : `from ${label(it.start)} to ${label(to - 1)}`;
+      where = `Under ${name} it waited for ${was.binding.kind === "hire" ? "a hire to carry" : "room on"} ${seatTitle(plan, carrier)}${freed.length ? `; here ${who} put less there ${when}` : ""}. `;
+    } else if (was.binding.kind === "predecessor") {
+      const p = before.get(was.binding.id)!;
+      const then = was.beyond ? "does not fit inside the horizon there" : p.item.standing ? "starts earlier here" : "ends earlier here";
+      where = `Under ${name} it waited for "${p.item.label}", which ${then}. `;
+    }
+    out.push({
+      code: "W117",
+      severity: "info",
+      subject: it.item.id,
+      message,
+      hint: `${where}Leveling is a serial heuristic: work a tighter scenario delays can leave room that this item takes. Read the move as a side effect of the scenario, not a gain.`,
+    });
+  }
   return out;
 }
 
