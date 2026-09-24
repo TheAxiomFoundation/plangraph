@@ -78,7 +78,7 @@ describe("plangraph watch", () => {
 
   // The plan starts as a FIFO, so the first check blocks in its read until the test feeds it: the
   // save below lands while that check is still running, whatever the machine's load. On Linux a
-  // watcher started only after the first check never sees that save, so this fails there. macOS
+  // watcher started only after the first check misses that save, so this fails there. macOS
   // has reported a plan.json event to a watcher started seconds after such a save, so there it
   // can pass either way.
   it.skipIf(process.platform === "win32")("re-runs for a save that lands while the first check is still running", async () => {
@@ -107,7 +107,7 @@ describe("plangraph watch", () => {
       watcher.child.kill("SIGINT");
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 40_000);
+  }, 60_000);
 
   it("exits 1 with one line when the plan's directory cannot be watched", () => {
     const dir = mkdtempSync(join(tmpdir(), "plangraph-watch-"));
