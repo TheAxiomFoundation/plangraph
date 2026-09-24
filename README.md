@@ -145,4 +145,4 @@ pools shared across plans. Priced external work. Cost of capital. A drag interfa
 
 ## License
 
-Apache-2.0. Built at [The Axiom Foundation](https://axiom.org).
+MIT. Built at [The Axiom Foundation](https://axiom.org).
