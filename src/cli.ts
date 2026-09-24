@@ -145,7 +145,7 @@ if (cmd === "check") process.exit(check());
 // watch: one check now, then one after every save of the plan file. Watching the directory
 // catches editors that save by renaming; a short debounce folds the write bursts they make.
 // The watcher starts before the first check, so a save that lands while that check runs
-// still queues a re-run instead of being lost.
+// still queues a re-run instead of being lost (a macOS watcher can take a moment to go live).
 const target = resolve(file);
 let pending: ReturnType<typeof setTimeout> | undefined;
 const rerun = () => {
