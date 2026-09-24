@@ -144,6 +144,8 @@ if (cmd === "check") process.exit(check());
 
 // watch: one check now, then one after every save of the plan file. Watching the directory
 // catches editors that save by renaming; a short debounce folds the write bursts they make.
+// The watcher starts before the first check, so a save that lands while that check runs
+// still queues a re-run instead of being lost.
 const target = resolve(file);
 let pending: ReturnType<typeof setTimeout> | undefined;
 const rerun = () => {
@@ -153,8 +155,13 @@ const rerun = () => {
     check();
   }, 120);
 };
+try {
+  watchDir(dirname(target), (_event, name) => {
+    if (!name || name.toString() === basename(target)) rerun();
+  });
+} catch (e) {
+  console.error(errorLine(e));
+  process.exit(1);
+}
 check();
 console.log(`\nwatching ${target} · re-runs on every save · Ctrl-C to stop`);
-watchDir(dirname(target), (_event, name) => {
-  if (!name || name.toString() === basename(target)) rerun();
-});
