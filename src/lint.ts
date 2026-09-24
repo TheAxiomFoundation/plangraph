@@ -138,14 +138,41 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const label = (m: number) => monthLabel(cal, m);
   const byId = new Map(s.items.map((x) => [x.item.id, x]));
   /**
-   * For an item beyond the horizon, the item the scenario drops at the root of its chain of
-   * never-arriving predecessors, or null when the chain ends at capacity or the horizon.
+   * What holds an item beyond the horizon, traced through every predecessor that is beyond it,
+   * not only the one its binding names: the items the scenario drops, and the items that do not
+   * fit for a reason of their own. The trace goes on through a dropped item that is not underway,
+   * since kept, it would still wait for its own predecessors. Both empty for an item that is not
+   * beyond, or not beyond because of a predecessor. Each list in id order.
    */
-  const droppedUpstream = (it: Scheduled): Scheduled | null => {
-    let cur = it;
-    while (cur.beyond && cur.binding.kind === "predecessor") cur = byId.get(cur.binding.id)!;
-    return cur.dropped ? cur : null;
+  const heldBy = (it: Scheduled): { dropped: Scheduled[]; unfit: Scheduled[] } => {
+    const dropped: Scheduled[] = [];
+    const unfit: Scheduled[] = [];
+    const seen = new Set<string>();
+    const walk = (cur: Scheduled): void => {
+      for (const p of cur.item.predecessors) {
+        const pd = byId.get(p.id)!;
+        if (!pd.beyond || seen.has(pd.item.id)) continue;
+        seen.add(pd.item.id);
+        if (pd.dropped) {
+          dropped.push(pd);
+          if (!pd.item.underway) walk(pd);
+        } else if (pd.binding.kind === "predecessor") walk(pd);
+        else unfit.push(pd);
+      }
+    };
+    if (it.beyond && !it.dropped && it.binding.kind === "predecessor") walk(it);
+    const byItemId = (a: Scheduled, b: Scheduled) => (a.item.id < b.item.id ? -1 : 1);
+    return { dropped: dropped.sort(byItemId), unfit: unfit.sort(byItemId) };
   };
+  /** Quoted, joined with "and": `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
+  const quoted = (xs: string[]): string => {
+    const q = xs.map((x) => `"${x}"`);
+    return q.length < 2 ? q.join("") : `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}`;
+  };
+  /** Why an item held by a drop never starts: the drop, and anything upstream that does not fit either. */
+  const heldCause = (held: { dropped: Scheduled[]; unfit: Scheduled[] }, name: (x: Scheduled) => string): string =>
+    `this scenario drops ${quoted(held.dropped.map(name))}, which it depends on` +
+    (held.unfit.length ? `, and ${quoted(held.unfit.map(name))} ${held.unfit.length === 1 ? "does" : "do"} not fit inside the horizon` : "");
   const years = fundingYears(cal);
   const y1End = cal.fundingYearStartMonth + 12;
   const policy = lintPolicy(plan);
@@ -212,13 +239,19 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   }
 
   // W104 slips against the declared start, with the binding constraint. An item that never starts
-  // because the scenario drops something upstream says so, rather than blaming capacity or the horizon.
+  // because the scenario drops something upstream says so, whichever of its never-arriving
+  // predecessors the binding names, rather than blaming capacity or the horizon. It names every
+  // drop upstream and everything upstream that does not fit either. Whether keeping them would
+  // be enough (a kept item can still overrun the horizon) takes a schedule without the drops.
   for (const it of s.items) {
     if (it.dropped) continue;
-    const root = it.beyond ? droppedUpstream(it) : null;
-    if (root && it.binding.kind === "predecessor") {
-      const through = it.binding.id === root.item.id ? "" : ` through "${byId.get(it.binding.id)!.item.label}"`;
-      out.push({ code: "W104", severity: "warn", subject: it.item.id, message: `"${it.item.label}" never starts: this scenario drops "${root.item.label}", which it depends on${through}.`, hint: `Drop "${it.item.id}" from the scenario as well, or keep "${root.item.id}".` });
+    const held = heldBy(it);
+    if (held.dropped.length && it.binding.kind === "predecessor") {
+      const sole = held.dropped.length === 1 && held.unfit.length === 0 ? held.dropped[0] : null;
+      const direct = sole !== null && it.item.predecessors.some((p) => p.id === sole.item.id);
+      const through = sole && !direct ? ` through "${byId.get(it.binding.id)!.item.label}"` : "";
+      const keep = `keep ${quoted(held.dropped.map((x) => x.item.id))}${held.unfit.length ? ` and fit ${quoted(held.unfit.map((x) => x.item.id))} inside the horizon` : ""}`;
+      out.push({ code: "W104", severity: "warn", subject: it.item.id, message: `"${it.item.label}" never starts: ${heldCause(held, (x) => x.item.label)}${through}.`, hint: `Drop "${it.item.id}" from the scenario as well, or ${keep}.` });
       continue;
     }
     if (it.beyond) {
@@ -278,12 +311,12 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   for (const st of plan.streams) {
     if (l.unlocks[st.id] !== null) continue;
     const it = byId.get(st.unlockedBy);
-    const root = it?.beyond ? droppedUpstream(it) : null;
-    const hint = !root
-      ? `Its item "${st.unlockedBy}" does not finish by ${label(H - 1)}.`
-      : root.item.id === st.unlockedBy
-        ? `Its item "${st.unlockedBy}" is dropped in this scenario.`
-        : `Its item "${st.unlockedBy}" never starts: this scenario drops "${root.item.id}", which it depends on.`;
+    const held = it ? heldBy(it) : { dropped: [], unfit: [] };
+    const hint = it?.dropped
+      ? `Its item "${st.unlockedBy}" is dropped in this scenario.`
+      : held.dropped.length
+        ? `Its item "${st.unlockedBy}" never starts: ${heldCause(held, (x) => x.item.id)}.`
+        : `Its item "${st.unlockedBy}" does not finish by ${label(H - 1)}.`;
     out.push({ code: "W108", severity: "warn", subject: st.id, message: `Stream "${st.label}" never unlocks inside the horizon.`, hint });
   }
 

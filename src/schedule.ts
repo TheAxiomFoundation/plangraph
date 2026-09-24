@@ -26,13 +26,13 @@ export type Binding =
 export interface Scheduled {
   item: WorkItem;
   start: number;
-  /** Exclusive. Equal to the horizon for standing items and for items beyond it, dropped items included (start too). */
+  /** Exclusive. Equal to the horizon for standing items. An item beyond it, dropped or not, starts and ends at the horizon. */
   end: number;
   /** Months actually scheduled: the item's duration, or the horizon minus start for standing items. */
   duration: number;
   /** True when the item cannot complete inside the horizon. It books nothing. */
   beyond: boolean;
-  /** True when the scenario drops the item: it does not exist, books nothing, and no finding names it. */
+  /** True when the scenario drops the item: it does not exist, books nothing, and no scenario finding is about it. */
   dropped?: boolean;
   binding: Binding;
   /** Who carries each demand at the start month: the seat, or its fallback. Empty when beyond. */

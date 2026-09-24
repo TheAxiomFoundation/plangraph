@@ -223,7 +223,7 @@ export interface Scenario {
   dropSeats?: SeatId[];
   /** Individual hires that do not exist in this scenario: indices into the role's hireMonths. */
   dropHires?: Record<SeatId, number[]>;
-  /** Items that do not exist in this scenario (a pilot whose funding is not counted, say): no run, no bookings, no findings. */
+  /** Items that do not exist in this scenario (a pilot whose funding is not counted, say): no run, no bookings, no scenario findings of their own; planned dependents go beyond the horizon. */
   dropItems?: string[];
   /** Multiply every stream's volumes. Positive. */
   volumeScale?: number;
