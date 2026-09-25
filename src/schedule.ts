@@ -3,17 +3,21 @@
 // Underway items are taken first, at their declared starts, so leveling counts their load
 // wherever it waits for room; they wait for nothing, so they pull no predecessor ahead.
 // Planned items follow in priority order (circle, then the item's priority, then declared
-// start, then id), predecessors always first. Each starts at the latest of: its declared
-// earliest month; every predecessor's end plus lag (a standing predecessor counts from its
-// start plus one, since it never ends); and, when the scenario levels capacity, the first
-// month from which every carrier it needs has room for the whole run. Demands are resolved to
-// carriers month by month and aggregated per carrier before they are compared with capacity,
-// so two demands that land on the same person count together.
+// start, then id), each after its predecessors, which go in id order. Each planned item starts
+// at the later of its declared earliest month and every predecessor's end plus lag (a standing
+// predecessor counts from its start plus one, since it never ends); when the scenario levels
+// capacity, it then waits for the first month from which every carrier it needs has room for
+// the whole run (with plan.levelOn "owner", only the owner's seat; see fits() for unlevelled
+// seats). Demands are resolved to carriers month by month and aggregated per carrier before
+// they are compared with capacity, so two demands that land on the same person count together.
 //
 // A finite item must fit entirely inside the horizon to be scheduled; one that cannot is
-// beyond the horizon: it books nothing, unlocks nothing, and takes its dependents with it.
+// beyond the horizon: it books nothing, unlocks nothing, and takes its planned dependents with it.
 //
-// Every start records the constraint that bound it. Deterministic: same inputs, same output.
+// Every start records the constraint that bound it, and an item beyond the horizon records
+// why: a predecessor that never finishes; the horizon, when the run is longer than the months
+// left after its declared start and its predecessors; or else the seat leveling last found
+// full. A dropped item's binding is "dropped". Deterministic: same inputs, same output.
 
 import { has, ownerOf, table, type Plan, type Scenario, type SeatDef, type SeatId, type WorkItem, demandAt } from "./model.js";
 
@@ -25,16 +29,19 @@ export type Binding =
   | { kind: "horizon" }
   | { kind: "dropped" };
 
+/** Why a run does not fit from a given start when leveling. */
+type Blocked = Extract<Binding, { kind: "capacity" } | { kind: "horizon" }>;
+
 export interface Scheduled {
   item: WorkItem;
   start: number;
-  /** Exclusive. Equal to the horizon for standing items and for items beyond it. */
+  /** Exclusive. Equal to the horizon for standing items. An item beyond it, dropped or not, starts and ends at the horizon. */
   end: number;
   /** Months actually scheduled: the item's duration, or the horizon minus start for standing items. */
   duration: number;
   /** True when the item cannot complete inside the horizon. It books nothing. */
   beyond: boolean;
-  /** True when the scenario drops the item: it does not exist, books nothing, and no finding names it. */
+  /** True when the scenario drops the item: it does not exist, books nothing, and no scenario finding is about it. */
   dropped?: boolean;
   binding: Binding;
   /** Who carries each demand at the start month: the seat, or its fallback. Empty when beyond. */
@@ -45,7 +52,7 @@ export interface SeatLoad {
   seat: SeatId;
   /** Demand in FTE by month, including load handed to this seat as a fallback. */
   demand: number[];
-  /** The part leveling cannot move: underway items and load carried for unfilled seats. */
+  /** Underway load, which leveling never moves, and load carried for a seat with no hire that month. */
   fixed: number[];
   /** Seats hired by month × capacity per seat. */
   capacity: number[];
@@ -225,9 +232,9 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       fte: finiteResult(demandAt(d, m - start) * eff, `demand for item "${i.id}" and seat "${d.seat}"`),
     }));
 
-  /** Whether the whole run fits from `start`; on failure, the carrier with the largest shortfall. */
-  const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; seat: SeatId; carrier: SeatId } => {
-    if (!i.standing && start + duration > H) return { ok: false, seat: ownerOf(i), carrier: ownerOf(i) };
+  /** Whether the whole run fits from `start`; on failure, the horizon, or else the carrier with the largest shortfall in the first month short of room. */
+  const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; why: Blocked } => {
+    if (!i.standing && start + duration > H) return { ok: false, why: { kind: "horizon" } };
     for (let m = start; m < Math.min(start + duration, H); m++) {
       const landed = new Map<SeatId, { fte: number; seat: SeatId }>();
       for (const p of placements(i, m, start)) {
@@ -244,10 +251,12 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       for (const [carrier, demand] of landed) {
         const load = loads.get(carrier);
         // Leadership absorbs rather than slips, so its overload is reported, not scheduled around.
-        // The one exception: an item OWNED by a leadership seat that is not yet hired waits for
-        // the hire; a contribution from an unhired leadership seat is unstaffed, not blocking.
+        // The one exception: an item OWNED by a leadership seat that leaves its load on that
+        // seat while it has no hire (fallback null) waits for the hire. A contribution left on
+        // an unhired leadership seat is unstaffed, not blocking. Demand a fallback carries, the
+        // owner's included, is leveled on that fallback as usual.
         if (unlevelled.has(carrier) && ((load?.capacity[m] ?? 0) > 0 || carrier !== ownerOf(i))) continue;
-        if (plan.levelOn === "owner" && carrier !== ownerOf(i)) continue; // contributors are reported, not waited for
+        if (plan.levelOn === "owner" && carrier !== ownerOf(i)) continue; // load off the owner's seat is reported, not waited for
         const short = load ? load.demand[m] + demand.fte - load.capacity[m] : demand.fte;
         const earlier =
           worst !== null &&
@@ -257,7 +266,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
           worst = { short, seat: demand.seat, carrier };
         }
       }
-      if (worst) return { ok: false, seat: worst.seat, carrier: worst.carrier };
+      if (worst) return { ok: false, why: { kind: "capacity", seat: worst.seat, carrier: worst.carrier } };
     }
     return { ok: true };
   };
@@ -282,14 +291,15 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
 
   const droppedItems = new Set(scenario.dropItems ?? []);
   for (const i of order(plan.items, plan.circles)) {
+    if (droppedItems.has(i.id)) {
+      // Not in this scenario: no run, no bookings. It sits at the horizon like any item beyond
+      // it, and dependents treat it as never arriving.
+      done.set(i.id, { item: i, start: H, end: H, duration: 0, beyond: true, dropped: true, binding: { kind: "dropped" }, carriers: [] });
+      continue;
+    }
     let start = Math.max(0, i.earliest);
     let binding: Binding = i.underway ? { kind: "underway" } : { kind: "declared" };
     let beyond = false;
-    if (droppedItems.has(i.id)) {
-      // Not in this scenario: no run, no bookings; dependents treat it as never arriving.
-      done.set(i.id, { item: i, start, end: start, duration: 0, beyond: true, dropped: true, binding: { kind: "dropped" }, carriers: [] });
-      continue;
-    }
     if (!i.underway) {
       for (const p of [...i.predecessors].sort((x, y) => (x.id < y.id ? -1 : 1))) {
         const pd = done.get(p.id)!;
@@ -312,22 +322,24 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
     }
     if (!beyond && !i.underway) {
       if (scenario.level) {
+        // Probe forward a month at a time. The binding is the last seat found without room; if
+        // there is none, every probe overshot the horizon, and the horizon binds.
         let probe = start;
-        let f = fits(i, probe, duration);
-        while (!f.ok && probe < H) {
-          probe += 1;
+        let full: Extract<Blocked, { kind: "capacity" }> | null = null;
+        for (; probe < H; probe++) {
           duration = durationOf(i, probe);
-          f = fits(i, probe, duration);
+          const f = fits(i, probe, duration);
+          if (f.ok) break;
+          if (f.why.kind === "capacity") full = f.why;
         }
-        if (probe !== start) {
-          if (probe >= H) {
-            beyond = true;
-            binding = { kind: "horizon" };
-          } else {
-            const last = fits(i, probe - 1, durationOf(i, probe - 1)) as { ok: false; seat: SeatId; carrier: SeatId };
-            binding = { kind: "capacity", seat: last.seat, carrier: last.carrier };
-            start = probe;
-          }
+        if (probe >= H) {
+          beyond = true;
+          binding = full ?? { kind: "horizon" };
+        } else if (probe !== start) {
+          // The probe before this one failed, and not on the horizon: a run that overshot it
+          // from there would overshoot it from here too, and standing work never overshoots.
+          binding = full!;
+          start = probe;
         }
       } else if (!i.standing && start + duration > H) {
         beyond = true;
@@ -366,10 +378,14 @@ export interface Slip {
   binding: Binding;
 }
 
-/** Items that moved against a baseline schedule, largest slip first. */
+/**
+ * Items that moved against a baseline schedule, largest slip first. An item either schedule
+ * drops is left out: it does not exist there, so it has not moved. Its dependents still slip.
+ */
 export function slips(base: Schedule, other: Schedule): Slip[] {
   const byId = new Map(base.items.map((s) => [s.item.id, s]));
   return other.items
+    .filter((s) => !s.dropped && !byId.get(s.item.id)!.dropped)
     .map((s) => {
       const b = byId.get(s.item.id)!;
       return { id: s.item.id, label: s.item.label, months: s.start - b.start, beyond: s.beyond && !b.beyond, binding: s.binding };

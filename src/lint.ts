@@ -5,7 +5,7 @@
 
 import { atFundingYearEnd, byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
 import { lintPolicy, monthLabel, ownerOf, type Plan, type SeatId } from "./model.js";
-import { overloads, type Schedule } from "./schedule.js";
+import { overloads, type Schedule, type Scheduled } from "./schedule.js";
 
 export type Severity = "error" | "warn" | "info";
 
@@ -21,6 +21,15 @@ export interface Finding {
 const seatTitle = (plan: Plan, id: string) => plan.seats.find((s) => s.id === id)?.title ?? id;
 
 const percent = (share: number): string => `${Number((share * 100).toFixed(1))}%`;
+
+/**
+ * Sums of FTE and of dollars can differ in their last bit with the order they were added, so
+ * thresholds on sums, and on shares of them, get the slack overloads() uses: a value exactly
+ * at a threshold counts as at it, whatever the order. Cash is a running sum of dollars whose
+ * drift can pass that slack, so W105 gets half a cent instead.
+ */
+const SLACK = 1e-9;
+const CASH_SLACK = 0.005;
 
 /** Structural checks that need no schedule. */
 export function lintPlan(plan: Plan): Finding[] {
@@ -137,20 +146,62 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const H = cal.horizonMonths;
   const label = (m: number) => monthLabel(cal, m);
   const byId = new Map(s.items.map((x) => [x.item.id, x]));
+  /**
+   * What holds an item beyond the horizon, traced through every predecessor that is beyond it,
+   * not only the one its binding names: the items the scenario drops, and the items that do not
+   * fit for a reason of their own. The trace goes on through a dropped item that is not underway,
+   * since kept, it would still wait for its own predecessors. Both empty for an item that is not
+   * beyond, or not beyond because of a predecessor. Each list in id order.
+   */
+  const heldBy = (it: Scheduled): { dropped: Scheduled[]; unfit: Scheduled[] } => {
+    const dropped: Scheduled[] = [];
+    const unfit: Scheduled[] = [];
+    const seen = new Set<string>();
+    const walk = (cur: Scheduled): void => {
+      for (const p of cur.item.predecessors) {
+        const pd = byId.get(p.id)!;
+        if (!pd.beyond || seen.has(pd.item.id)) continue;
+        seen.add(pd.item.id);
+        if (pd.dropped) {
+          dropped.push(pd);
+          if (!pd.item.underway) walk(pd);
+        } else if (pd.binding.kind === "predecessor") walk(pd);
+        else unfit.push(pd);
+      }
+    };
+    if (it.beyond && !it.dropped && it.binding.kind === "predecessor") walk(it);
+    const byItemId = (a: Scheduled, b: Scheduled) => (a.item.id < b.item.id ? -1 : 1);
+    return { dropped: dropped.sort(byItemId), unfit: unfit.sort(byItemId) };
+  };
+  /** Quoted, joined with "and": `"a"`, `"a" and "b"`, `"a", "b" and "c"`. */
+  const quoted = (xs: string[]): string => {
+    const q = xs.map((x) => `"${x}"`);
+    return q.length < 2 ? q.join("") : `${q.slice(0, -1).join(", ")} and ${q[q.length - 1]}`;
+  };
+  /** Why an item held by a drop never starts: the drop, and anything upstream that does not fit either. */
+  const heldCause = (held: { dropped: Scheduled[]; unfit: Scheduled[] }, name: (x: Scheduled) => string): string =>
+    `this scenario drops ${quoted(held.dropped.map(name))}, which it depends on` +
+    (held.unfit.length ? `, and ${quoted(held.unfit.map(name))} ${held.unfit.length === 1 ? "does" : "do"} not fit inside the horizon` : "");
   const years = fundingYears(cal);
   const y1End = cal.fundingYearStartMonth + 12;
   const policy = lintPolicy(plan);
 
   // W101 overloaded seats.
   for (const o of overloads(s)) {
-    if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte) {
+    if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte - SLACK) {
+      // Under leveling, the hint names the load leveling does not wait for on this seat.
+      const left = plan.seats.find((x) => x.id === o.seat)?.unlevelled
+        ? "Leveling does not wait for room on a leadership seat, only for the hire of one with no fallback on an item it owns, so its overload is reported here instead."
+        : plan.levelOn === "owner"
+          ? "Under levelOn owner, leveling waits for room on this seat only for items it owns and never for underway work, so underway load or work on items it does not own is what puts it over."
+          : "Leveling waits for room on this seat for all but underway work, so underway load is what puts it over.";
       out.push({
         code: "W101",
         severity: "warn",
         subject: o.seat,
         message: `${seatTitle(plan, o.seat)} is over capacity in ${o.months.length} months (peak +${o.peak.toFixed(2)} FTE), first in ${label(o.months[0])}.`,
         hint: s.scenario.level
-          ? "Leveling already moved what it could; the remainder is underway or fallback load. Add a seat, narrow the mandate, or lower the effort assumption."
+          ? `${left} Add a seat, narrow the mandate, or lower the effort assumption.`
           : "Run a leveled scenario to see what slides, or narrow this seat's portfolio.",
       });
     }
@@ -166,7 +217,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       for (let m = h; m < H; m++) {
         const capacity = load.capacity[m];
         const share = capacity > 0 ? load.demand[m] / capacity : load.demand[m] > 0 ? Infinity : 0;
-        if (share >= policy.idleLoadShare) break;
+        if (share >= policy.idleLoadShare - SLACK) break;
         idle++;
         peakShare = Math.max(peakShare, share);
       }
@@ -202,13 +253,26 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W104 slips against the declared start, with the binding constraint.
+  // W104 slips against the declared start, with the binding constraint. An item that never starts
+  // because the scenario drops something upstream says so, whichever of its never-arriving
+  // predecessors the binding names, rather than blaming capacity or the horizon. It names every
+  // drop upstream and everything upstream that does not fit either. Whether keeping them would
+  // be enough (a kept item can still overrun the horizon) takes a schedule without the drops.
   for (const it of s.items) {
     if (it.dropped) continue;
+    const held = heldBy(it);
+    if (held.dropped.length && it.binding.kind === "predecessor") {
+      const sole = held.dropped.length === 1 && held.unfit.length === 0 ? held.dropped[0] : null;
+      const direct = sole !== null && it.item.predecessors.some((p) => p.id === sole.item.id);
+      const through = sole && !direct ? ` through "${byId.get(it.binding.id)!.item.label}"` : "";
+      const keep = `keep ${quoted(held.dropped.map((x) => x.item.id))}${held.unfit.length ? ` and fit ${quoted(held.unfit.map((x) => x.item.id))} inside the horizon` : ""}`;
+      out.push({ code: "W104", severity: "warn", subject: it.item.id, message: `"${it.item.label}" never starts: ${heldCause(held, (x) => x.item.label)}${through}.`, hint: `Drop "${it.item.id}" from the scenario as well, or ${keep}.` });
+      continue;
+    }
     if (it.beyond) {
       const why =
         it.binding.kind === "capacity"
-          ? `no room on ${seatTitle(plan, it.binding.carrier)} inside the horizon`
+          ? `leveling found no start with room for it; the last seat without room was ${seatTitle(plan, it.binding.carrier)}`
           : it.binding.kind === "predecessor"
             ? `"${byId.get(it.binding.id)!.item.label}" never finishes`
             : it.binding.kind === "horizon"
@@ -230,7 +294,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   }
 
   // W105 cash goes negative.
-  const firstNeg = l.cash.findIndex((c) => c < 0);
+  const firstNeg = l.cash.findIndex((c) => c < -CASH_SLACK);
   if (firstNeg >= 0) {
     let trough = l.cash[firstNeg];
     for (let m = firstNeg + 1; m < l.cash.length; m++) trough = Math.min(trough, l.cash[m]);
@@ -243,7 +307,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const assumed = plan.streams
     .filter((st) => st.volumeByYear.basis === "A")
     .reduce((n, st) => n + sumRange(l.revenueByStream[st.id], span[0], span[1]), 0);
-  if (total > 0 && assumed / total > policy.assumedRevenueShare) {
+  if (total > 0 && assumed / total > policy.assumedRevenueShare + SLACK) {
     out.push({ code: "W106", severity: "info", subject: s.scenario.id, message: `${Math.round((assumed / total) * 100)}% of revenue over ${years} years rests on assumed volumes.`, hint: "Land a receipt per stream: a rate card, a signed pilot, a contract." });
   }
 
@@ -257,9 +321,18 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W108 streams that never unlock.
+  // W108 streams that never unlock. One keyed to a dropped item, or to an item downstream of one,
+  // is still revenue the scenario loses; the hint says it was dropped rather than late.
   for (const st of plan.streams) {
-    if (l.unlocks[st.id] === null) out.push({ code: "W108", severity: "warn", subject: st.id, message: `Stream "${st.label}" never unlocks inside the horizon.`, hint: `Its item "${st.unlockedBy}" does not finish by ${label(H - 1)}.` });
+    if (l.unlocks[st.id] !== null) continue;
+    const it = byId.get(st.unlockedBy);
+    const held = it ? heldBy(it) : { dropped: [], unfit: [] };
+    const hint = it?.dropped
+      ? `Its item "${st.unlockedBy}" is dropped in this scenario.`
+      : held.dropped.length
+        ? `Its item "${st.unlockedBy}" never starts: ${heldCause(held, (x) => x.item.id)}.`
+        : `Its item "${st.unlockedBy}" does not finish by ${label(H - 1)}.`;
+    out.push({ code: "W108", severity: "warn", subject: st.id, message: `Stream "${st.label}" never unlocks inside the horizon.`, hint });
   }
 
   // W109 portfolios too wide: a seat owning too many concurrent items.
@@ -291,12 +364,12 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (years >= n) {
       const costRef = byFundingYear(l.cost, cal, n).reduce((a, b) => a + b, 0);
       const ratio = costRef / ref.gross;
-      if (ratio < 1 - policy.referenceCostTolerance || ratio > 1 + policy.referenceCostTolerance) {
+      if (ratio < 1 - policy.referenceCostTolerance - SLACK || ratio > 1 + policy.referenceCostTolerance + SLACK) {
         out.push({ code: "W111", severity: "info", subject: s.scenario.id, message: `${n}-year cost ${(costRef / 1e6).toFixed(1)}M is ${Math.round((ratio - 1) * 100)}% off the reference ${(ref.gross / 1e6).toFixed(1)}M.`, hint: "Labor is derived; the non-labor lines are the assumed part. Reconcile there first." });
       }
       const nl = byFundingYear(l.nonLabor.map((v, m) => v + l.burn[m]), cal, n).reduce((a, b) => a + b, 0);
       const share = costRef > 0 ? nl / costRef : 0;
-      if (share < ref.nonLaborShare[0] || share > ref.nonLaborShare[1]) {
+      if (share < ref.nonLaborShare[0] - SLACK || share > ref.nonLaborShare[1] + SLACK) {
         out.push({ code: "W112", severity: "info", subject: s.scenario.id, message: `Non-labor is ${Math.round(share * 100)}% of cost over ${n} years.`, hint: ref.note });
       }
     }
@@ -311,7 +384,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       internalFte += booking.fte;
       if (!Number.isFinite(internalFte)) throw new Error(`plangraph: non-finite internal FTE-months in circle "${last}"`);
     }
-    if (internalFte > policy.lastCircleFteMonths) {
+    if (internalFte > policy.lastCircleFteMonths + SLACK) {
       out.push({ code: "W115", severity: "info", subject: last, message: `${Number(internalFte.toFixed(2))} internal FTE-months go to work in the last circle (${last}).`, hint: "Fund it separately, or say plainly that the base seats carry it." });
     }
   }
@@ -330,8 +403,8 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       }
       if (
         fallback > 0 &&
-        total > policy.principalLoad * seat.capacityFte &&
-        (worst === null || total > worst.total)
+        total > policy.principalLoad * seat.capacityFte + SLACK &&
+        (worst === null || total > worst.total + SLACK)
       ) {
         worst = { month: m, total, fallback };
       }
