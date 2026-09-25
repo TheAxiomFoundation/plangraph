@@ -22,6 +22,15 @@ const seatTitle = (plan: Plan, id: string) => plan.seats.find((s) => s.id === id
 
 const percent = (share: number): string => `${Number((share * 100).toFixed(1))}%`;
 
+/**
+ * Sums of FTE and of dollars can differ in their last bit with the order they were added, so
+ * thresholds on sums, and on shares of them, get the slack overloads() uses: a value exactly
+ * at a threshold counts as at it, whatever the order. Cash is a running sum of dollars whose
+ * drift can pass that slack, so W105 gets half a cent instead.
+ */
+const SLACK = 1e-9;
+const CASH_SLACK = 0.005;
+
 /** Structural checks that need no schedule. */
 export function lintPlan(plan: Plan): Finding[] {
   const out: Finding[] = [];
@@ -179,14 +188,20 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
 
   // W101 overloaded seats.
   for (const o of overloads(s)) {
-    if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte) {
+    if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte - SLACK) {
+      // Under leveling, the hint names the load leveling does not wait for on this seat.
+      const left = plan.seats.find((x) => x.id === o.seat)?.unlevelled
+        ? "Leveling does not wait for room on a leadership seat, only for the hire of one with no fallback on an item it owns, so its overload is reported here instead."
+        : plan.levelOn === "owner"
+          ? "Under levelOn owner, leveling waits for room on this seat only for items it owns and never for underway work, so underway load or work on items it does not own is what puts it over."
+          : "Leveling waits for room on this seat for all but underway work, so underway load is what puts it over.";
       out.push({
         code: "W101",
         severity: "warn",
         subject: o.seat,
         message: `${seatTitle(plan, o.seat)} is over capacity in ${o.months.length} months (peak +${o.peak.toFixed(2)} FTE), first in ${label(o.months[0])}.`,
         hint: s.scenario.level
-          ? "Leveling already moved what it could; the remainder is underway or fallback load. Add a seat, narrow the mandate, or lower the effort assumption."
+          ? `${left} Add a seat, narrow the mandate, or lower the effort assumption.`
           : "Run a leveled scenario to see what slides, or narrow this seat's portfolio.",
       });
     }
@@ -202,7 +217,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       for (let m = h; m < H; m++) {
         const capacity = load.capacity[m];
         const share = capacity > 0 ? load.demand[m] / capacity : load.demand[m] > 0 ? Infinity : 0;
-        if (share >= policy.idleLoadShare) break;
+        if (share >= policy.idleLoadShare - SLACK) break;
         idle++;
         peakShare = Math.max(peakShare, share);
       }
@@ -257,7 +272,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (it.beyond) {
       const why =
         it.binding.kind === "capacity"
-          ? `no room on ${seatTitle(plan, it.binding.carrier)} inside the horizon`
+          ? `leveling found no start with room for it; the last seat without room was ${seatTitle(plan, it.binding.carrier)}`
           : it.binding.kind === "predecessor"
             ? `"${byId.get(it.binding.id)!.item.label}" never finishes`
             : it.binding.kind === "horizon"
@@ -279,7 +294,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   }
 
   // W105 cash goes negative.
-  const firstNeg = l.cash.findIndex((c) => c < 0);
+  const firstNeg = l.cash.findIndex((c) => c < -CASH_SLACK);
   if (firstNeg >= 0) {
     let trough = l.cash[firstNeg];
     for (let m = firstNeg + 1; m < l.cash.length; m++) trough = Math.min(trough, l.cash[m]);
@@ -292,7 +307,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const assumed = plan.streams
     .filter((st) => st.volumeByYear.basis === "A")
     .reduce((n, st) => n + sumRange(l.revenueByStream[st.id], span[0], span[1]), 0);
-  if (total > 0 && assumed / total > policy.assumedRevenueShare) {
+  if (total > 0 && assumed / total > policy.assumedRevenueShare + SLACK) {
     out.push({ code: "W106", severity: "info", subject: s.scenario.id, message: `${Math.round((assumed / total) * 100)}% of revenue over ${years} years rests on assumed volumes.`, hint: "Land a receipt per stream: a rate card, a signed pilot, a contract." });
   }
 
@@ -349,12 +364,12 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (years >= n) {
       const costRef = byFundingYear(l.cost, cal, n).reduce((a, b) => a + b, 0);
       const ratio = costRef / ref.gross;
-      if (ratio < 1 - policy.referenceCostTolerance || ratio > 1 + policy.referenceCostTolerance) {
+      if (ratio < 1 - policy.referenceCostTolerance - SLACK || ratio > 1 + policy.referenceCostTolerance + SLACK) {
         out.push({ code: "W111", severity: "info", subject: s.scenario.id, message: `${n}-year cost ${(costRef / 1e6).toFixed(1)}M is ${Math.round((ratio - 1) * 100)}% off the reference ${(ref.gross / 1e6).toFixed(1)}M.`, hint: "Labor is derived; the non-labor lines are the assumed part. Reconcile there first." });
       }
       const nl = byFundingYear(l.nonLabor.map((v, m) => v + l.burn[m]), cal, n).reduce((a, b) => a + b, 0);
       const share = costRef > 0 ? nl / costRef : 0;
-      if (share < ref.nonLaborShare[0] || share > ref.nonLaborShare[1]) {
+      if (share < ref.nonLaborShare[0] - SLACK || share > ref.nonLaborShare[1] + SLACK) {
         out.push({ code: "W112", severity: "info", subject: s.scenario.id, message: `Non-labor is ${Math.round(share * 100)}% of cost over ${n} years.`, hint: ref.note });
       }
     }
@@ -369,7 +384,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       internalFte += booking.fte;
       if (!Number.isFinite(internalFte)) throw new Error(`plangraph: non-finite internal FTE-months in circle "${last}"`);
     }
-    if (internalFte > policy.lastCircleFteMonths) {
+    if (internalFte > policy.lastCircleFteMonths + SLACK) {
       out.push({ code: "W115", severity: "info", subject: last, message: `${Number(internalFte.toFixed(2))} internal FTE-months go to work in the last circle (${last}).`, hint: "Fund it separately, or say plainly that the base seats carry it." });
     }
   }
@@ -388,8 +403,8 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       }
       if (
         fallback > 0 &&
-        total > policy.principalLoad * seat.capacityFte &&
-        (worst === null || total > worst.total)
+        total > policy.principalLoad * seat.capacityFte + SLACK &&
+        (worst === null || total > worst.total + SLACK)
       ) {
         worst = { month: m, total, fallback };
       }

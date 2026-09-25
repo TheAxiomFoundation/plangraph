@@ -13,7 +13,10 @@
 // A finite item must fit entirely inside the horizon to be scheduled; one that cannot is
 // beyond the horizon: it books nothing, unlocks nothing, and takes its planned dependents with it.
 //
-// Every start records the constraint that bound it. Deterministic: same inputs, same output.
+// Every start records the constraint that bound it, and an item beyond the horizon records
+// why: a predecessor that never finishes; the horizon, when the run is longer than the months
+// left after its declared start and its predecessors; or else the seat leveling last found
+// full. A dropped item's binding is "dropped". Deterministic: same inputs, same output.
 
 import { has, ownerOf, table, type Plan, type Scenario, type SeatDef, type SeatId, type WorkItem, demandAt } from "./model.js";
 
@@ -24,6 +27,9 @@ export type Binding =
   | { kind: "capacity"; seat: SeatId; carrier: SeatId }
   | { kind: "horizon" }
   | { kind: "dropped" };
+
+/** Why a run does not fit from a given start when leveling. */
+type Blocked = Extract<Binding, { kind: "capacity" } | { kind: "horizon" }>;
 
 export interface Scheduled {
   item: WorkItem;
@@ -45,7 +51,7 @@ export interface SeatLoad {
   seat: SeatId;
   /** Demand in FTE by month, including load handed to this seat as a fallback. */
   demand: number[];
-  /** The part leveling cannot move: underway items and load carried for unfilled seats. */
+  /** Underway load, which leveling never moves, and load carried for a seat with no hire that month. */
   fixed: number[];
   /** Seats hired by month × capacity per seat. */
   capacity: number[];
@@ -212,9 +218,9 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       fte: finiteResult(demandAt(d, m - start) * eff, `demand for item "${i.id}" and seat "${d.seat}"`),
     }));
 
-  /** Whether the whole run fits from `start`; on failure, the carrier with the largest shortfall. */
-  const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; seat: SeatId; carrier: SeatId } => {
-    if (!i.standing && start + duration > H) return { ok: false, seat: ownerOf(i), carrier: ownerOf(i) };
+  /** Whether the whole run fits from `start`; on failure, the horizon, or else the carrier with the largest shortfall in the first month short of room. */
+  const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; why: Blocked } => {
+    if (!i.standing && start + duration > H) return { ok: false, why: { kind: "horizon" } };
     for (let m = start; m < Math.min(start + duration, H); m++) {
       const landed = new Map<SeatId, { fte: number; seat: SeatId }>();
       for (const p of placements(i, m, start)) {
@@ -246,7 +252,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
           worst = { short, seat: demand.seat, carrier };
         }
       }
-      if (worst) return { ok: false, seat: worst.seat, carrier: worst.carrier };
+      if (worst) return { ok: false, why: { kind: "capacity", seat: worst.seat, carrier: worst.carrier } };
     }
     return { ok: true };
   };
@@ -302,22 +308,24 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
     }
     if (!beyond && !i.underway) {
       if (scenario.level) {
+        // Probe forward a month at a time. The binding is the last seat found without room; if
+        // there is none, every probe overshot the horizon, and the horizon binds.
         let probe = start;
-        let f = fits(i, probe, duration);
-        while (!f.ok && probe < H) {
-          probe += 1;
+        let full: Extract<Blocked, { kind: "capacity" }> | null = null;
+        for (; probe < H; probe++) {
           duration = durationOf(i, probe);
-          f = fits(i, probe, duration);
+          const f = fits(i, probe, duration);
+          if (f.ok) break;
+          if (f.why.kind === "capacity") full = f.why;
         }
-        if (probe !== start) {
-          if (probe >= H) {
-            beyond = true;
-            binding = { kind: "horizon" };
-          } else {
-            const last = fits(i, probe - 1, durationOf(i, probe - 1)) as { ok: false; seat: SeatId; carrier: SeatId };
-            binding = { kind: "capacity", seat: last.seat, carrier: last.carrier };
-            start = probe;
-          }
+        if (probe >= H) {
+          beyond = true;
+          binding = full ?? { kind: "horizon" };
+        } else if (probe !== start) {
+          // The probe before this one failed, and not on the horizon: a run that overshot it
+          // from there would overshoot it from here too, and standing work never overshoots.
+          binding = full!;
+          start = probe;
         }
       } else if (!i.standing && start + duration > H) {
         beyond = true;
