@@ -1,14 +1,15 @@
 // The scheduler: a serial schedule-generation scheme over the plan graph.
 //
-// Items are taken in priority order (circle, then the item's priority, then declared start,
-// then id), each after its predecessors, which go in id order. Each planned item starts at the
-// later of its declared earliest month and every predecessor's end plus lag (a standing
+// Underway items are taken first, at their declared starts, so leveling counts their load
+// wherever it waits for room; they wait for nothing, so they pull no predecessor ahead.
+// Planned items follow in priority order (circle, then the item's priority, then declared
+// start, then id), each after its predecessors, which go in id order. Each planned item starts
+// at the later of its declared earliest month and every predecessor's end plus lag (a standing
 // predecessor counts from its start plus one, since it never ends); when the scenario levels
 // capacity, it then waits for the first month from which every carrier it needs has room for
 // the whole run (with plan.levelOn "owner", only the owner's seat; see fits() for unlevelled
-// seats). An underway item keeps its declared start: it waits for nothing and is not leveled.
-// Demands are resolved to carriers month by month and aggregated per carrier before they are
-// compared with capacity, so two demands that land on the same person count together.
+// seats). Demands are resolved to carriers month by month and aggregated per carrier before
+// they are compared with capacity, so two demands that land on the same person count together.
 //
 // A finite item must fit entirely inside the horizon to be scheduled; one that cannot is
 // beyond the horizon: it books nothing, unlocks nothing, and takes its planned dependents with it.
@@ -155,24 +156,37 @@ function order(items: WorkItem[], circles: string[]): WorkItem[] {
   };
   const cmp = (a: WorkItem, b: WorkItem) =>
     pri(a.circle) - pri(b.circle) || (a.priority ?? 0) - (b.priority ?? 0) || a.earliest - b.earliest || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-  const visited = new Set<string>();
-  const visiting = new Set<string>();
-  const out: WorkItem[] = [];
-  const visit = (i: WorkItem) => {
-    if (visited.has(i.id)) return;
-    if (visiting.has(i.id)) throw new Error(`plangraph: dependency cycle through "${i.id}"`);
-    visiting.add(i.id);
-    for (const p of [...i.predecessors].sort((x, y) => (x.id < y.id ? -1 : 1))) {
-      const pi = byId.get(p.id);
-      if (!pi) throw new Error(`plangraph: "${i.id}" depends on unknown item "${p.id}"`);
-      visit(pi);
-    }
-    visiting.delete(i.id);
-    visited.add(i.id);
-    out.push(i);
+  const sorted = [...items].sort(cmp);
+  /** Items in rank order, each after the predecessors it pulls ahead of itself. */
+  const walk = (pulls: (i: WorkItem) => boolean): WorkItem[] => {
+    const visited = new Set<string>();
+    const visiting = new Set<string>();
+    const out: WorkItem[] = [];
+    const visit = (i: WorkItem) => {
+      if (visited.has(i.id)) return;
+      if (visiting.has(i.id)) throw new Error(`plangraph: dependency cycle through "${i.id}"`);
+      visiting.add(i.id);
+      for (const p of pulls(i) ? [...i.predecessors].sort((x, y) => (x.id < y.id ? -1 : 1)) : []) {
+        const pi = byId.get(p.id);
+        if (!pi) throw new Error(`plangraph: "${i.id}" depends on unknown item "${p.id}"`);
+        visit(pi);
+      }
+      visiting.delete(i.id);
+      visited.add(i.id);
+      out.push(i);
+    };
+    for (const i of sorted) visit(i);
+    return out;
   };
-  for (const i of [...items].sort(cmp)) visit(i);
-  return out;
+  // Walk every edge once, so a cycle or an unknown predecessor through any item throws.
+  walk(() => true);
+  // Underway items book first. Their starts are facts: they wait for nothing, not even their
+  // predecessors, so booking them ahead breaks no dependency, and leveling then counts their
+  // load wherever it waits for room. For the same reason an underway item pulls none of
+  // its predecessors ahead: a planned predecessor books at its own rank, or ahead of a
+  // planned successor that waits for it.
+  const out = walk((i) => !i.underway);
+  return [...out.filter((i) => i.underway), ...out.filter((i) => !i.underway)];
 }
 
 export function schedule(plan: Plan, scenario: Scenario): Schedule {

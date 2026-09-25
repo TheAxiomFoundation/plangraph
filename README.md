@@ -49,7 +49,7 @@ directly; `plangraph/node` adds `loadPlanFile`, which reads from `node:fs`.
 | Node | What it carries |
 |---|---|
 | Seat | `loadedAnnual` cost. Optionally `loadedAnnualByYear` (one value per funding year, the last holding), which replaces the flat escalation for sources that escalate salary and then load it. Optionally `loadedAnnualByHire`, for a pooled role whose seats are paid differently: one entry per hire in `hireMonths` order, each a schedule like `loadedAnnualByYear`, or `null` for the role's rate. `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. `unlevelled: true` marks a leadership seat: leveling does not wait for room on it, and its overload is reported instead. The exception is an item the seat owns before its first hire, when the seat has `fallback: null`: leveling will not put that item's load on the empty seat, so the item waits until its load there falls after the hire, or goes beyond the horizon if the scenario never hires the seat. With a fallback, the seat's demand goes to the fallback before the hire and is leveled there as usual. |
-| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat (a demand may add a `profile`: FTE by quarter of the run, the last value holding, which replaces the flat FTE month by month), an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, a `circle`, its priority group, and an optional `priority`, its booking order inside the circle when leveling: lower first, default 0. |
+| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat (a demand may add a `profile`: FTE by quarter of the run, the last value holding, which replaces the flat FTE month by month), an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, a `circle`, its priority group, and an optional `priority`, the booking order of planned work inside the circle when leveling (underway items book first): lower first, default 0. |
 | Revenue stream | `unlockedBy` an item: the stream turns on when that item finishes, or, for a standing item, when it starts; `price`; recurring annual `volumeByYear` counted from the unlock, the last year holding; `rampMonths`. |
 | Funding line | dollars `byMonth`, `counted` by default or overridden by a scenario. |
 | Non-labor line | dollars `byYear` on the funding calendar. |
@@ -71,11 +71,12 @@ dates and scenario scales do not. Months are integers; there is no partial-month
 
 ## Scheduling
 
-The scheduler books items in priority order (circle, then `priority`, then declared start,
-then id), each after its predecessors, which go in id order. That can pull a predecessor
-ahead of work that outranks it. Underway items are booked in the same order, and leveling sees
-only load already booked, so it can place work on top of an underway item booked after it.
-The order moves starts only when leveling. It is a serial heuristic, not an optimizer.
+The scheduler books underway items first: their starts are facts, so wherever leveling
+waits for room, their load is already counted. It then books planned items in priority order
+(circle, then `priority`, then declared start, then id), each after its predecessors, which
+go in id order. That can pull a predecessor ahead of work that outranks it; an underway item
+pulls nothing ahead, since it waits for nothing. The order moves starts only when leveling.
+It is a serial heuristic, not an optimizer.
 
 Each planned item starts at the later of its declared month and its predecessors' ends plus
 any lag (a standing predecessor releases its successors one month after it starts). When
