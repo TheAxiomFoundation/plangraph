@@ -123,6 +123,18 @@ projection of the same.
 Thresholds come from `lintPolicy(plan)`; a plan sets its own under `lint`. There are no
 W113 or W114.
 
+A sum of FTE or dollars can differ in its last bit with the order it was added up, so the
+thresholds on sums and on shares of them (W101's peak, W102's share, W106's share, W111's
+ratio, W112's share, W115 and W116) allow 1e-9 of slack, as the scheduler does: a value
+exactly at a threshold counts as at it, whatever the order. W105 counts cash within half a
+cent of zero as zero, since a running sum of dollars can drift by more than 1e-9.
+
+The figures findings and the `check` report print from sums, shares and peaks go through
+`fmtFixed`, which snaps to eight decimals, coarser than that slack, and then rounds half away
+from zero. So the order does not show in a figure either: 14.025 FTE-months print as 14.03
+however they were added. The report's cash trough is the first month within half a cent of
+the lowest. `check --json` carries the raw sums.
+
 ## Compared with TaskJuggler
 
 [TaskJuggler](https://taskjuggler.org/) has done dependencies, resource leveling, accounts

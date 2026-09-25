@@ -177,5 +177,26 @@ export function atFundingYearEnd(row: number[], cal: Calendar, years = fundingYe
   });
 }
 
-export const fmtUsd = (n: number): string =>
-  Math.abs(n) >= 1e6 ? `$${(n / 1e6).toFixed(2)}M` : `$${Math.round(n / 1e3)}k`;
+/**
+ * A figure to `digits` decimals (0 to 7), half away from zero, for display. A sum of FTE or
+ * dollars can differ in its last bit with the order it was added up, and toFixed rounds the
+ * double it is given: FTE-months that come to 14.025 print 14.03 added one way and 14.02
+ * another. Snapping to eight decimals first absorbs up to five billionths of drift, more than
+ * the 1e-9 slack the harness gives a threshold, so a sum the harness counts as at a threshold
+ * also prints as it, whatever the order. The sign shows when the snapped value is below zero,
+ * as toFixed shows it. A value too large to snap is shown by toFixed as it is.
+ */
+export const fmtFixed = (x: number, digits: number): string => {
+  if (!Number.isInteger(digits) || digits < 0 || digits > 7) throw new Error(`plangraph: fmtFixed takes 0 to 7 digits, not ${digits}`);
+  const snapped = Math.round(Math.abs(x) * 1e8);
+  if (!Number.isSafeInteger(snapped)) return x.toFixed(digits);
+  const units = String(Math.round(snapped / 10 ** (8 - digits))).padStart(digits + 1, "0");
+  const shown = digits > 0 ? `${units.slice(0, -digits)}.${units.slice(-digits)}` : units;
+  return x < 0 && snapped > 0 ? `-${shown}` : shown;
+};
+
+/** Dollars as $1.23M, or $123k below a million once rounded to the thousand. */
+export const fmtUsd = (n: number): string => {
+  const thousands = Number(fmtFixed(n / 1e3, 0));
+  return Math.abs(thousands) >= 1000 ? `$${fmtFixed(n / 1e6, 2)}M` : `$${thousands}k`;
+};

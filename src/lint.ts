@@ -3,7 +3,7 @@
 // not make sense somewhere. Info is a fact worth knowing. Each finding names its subject and
 // says what to do, so an agent editing nodes gets the same feedback a reviewer would give.
 
-import { atFundingYearEnd, byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
+import { atFundingYearEnd, byFundingYear, fmtFixed, fundingYears, sumRange, type Ledger } from "./economics.js";
 import { lintPolicy, monthLabel, ownerOf, type Plan, type SeatId } from "./model.js";
 import { overloads, type Schedule } from "./schedule.js";
 
@@ -20,7 +20,16 @@ export interface Finding {
 
 const seatTitle = (plan: Plan, id: string) => plan.seats.find((s) => s.id === id)?.title ?? id;
 
-const percent = (share: number): string => `${Number((share * 100).toFixed(1))}%`;
+const percent = (share: number): string => `${Number(fmtFixed(share * 100, 1))}%`;
+
+/**
+ * Sums of FTE and of dollars can differ in their last bit with the order they were added, so
+ * thresholds on sums, and on shares of them, get the slack overloads() uses: a value exactly
+ * at a threshold counts as at it, whatever the order. Cash is a running sum of dollars whose
+ * drift can pass that slack, so W105 gets half a cent instead.
+ */
+const SLACK = 1e-9;
+const CASH_SLACK = 0.005;
 
 /** Structural checks that need no schedule. */
 export function lintPlan(plan: Plan): Finding[] {
@@ -143,12 +152,12 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
 
   // W101 overloaded seats.
   for (const o of overloads(s)) {
-    if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte) {
+    if (o.months.length >= policy.overloadMonths || o.peak >= policy.overloadPeakFte - SLACK) {
       out.push({
         code: "W101",
         severity: "warn",
         subject: o.seat,
-        message: `${seatTitle(plan, o.seat)} is over capacity in ${o.months.length} months (peak +${o.peak.toFixed(2)} FTE), first in ${label(o.months[0])}.`,
+        message: `${seatTitle(plan, o.seat)} is over capacity in ${o.months.length} months (peak +${fmtFixed(o.peak, 2)} FTE), first in ${label(o.months[0])}.`,
         hint: s.scenario.level
           ? "Leveling already moved what it could; the remainder is underway or fallback load. Add a seat, narrow the mandate, or lower the effort assumption."
           : "Run a leveled scenario to see what slides, or narrow this seat's portfolio.",
@@ -166,7 +175,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       for (let m = h; m < H; m++) {
         const capacity = load.capacity[m];
         const share = capacity > 0 ? load.demand[m] / capacity : load.demand[m] > 0 ? Infinity : 0;
-        if (share >= policy.idleLoadShare) break;
+        if (share >= policy.idleLoadShare - SLACK) break;
         idle++;
         peakShare = Math.max(peakShare, share);
       }
@@ -186,7 +195,7 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       if (c.carrier === c.seat && staffedAt(c.seat, it.start)) continue;
       const hires = s.hires[c.seat] ?? [];
       if (hires.length === 0) {
-        const who = staffedAt(c.carrier, it.start) ? `${seatTitle(plan, c.carrier)} carries its ${c.fte.toFixed(2)} FTE` : `nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}`;
+        const who = staffedAt(c.carrier, it.start) ? `${seatTitle(plan, c.carrier)} carries its ${fmtFixed(c.fte, 2)} FTE` : `nobody is hired to carry its ${fmtFixed(c.fte, 2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}`;
         out.push({ code: "W103", severity: "warn", subject: it.item.id, message: `"${it.item.label}" asks for ${seatTitle(plan, c.seat)}, which this scenario never hires; ${who}.`, hint: "Fund the seat, or accept that the carrier owns this for good." });
         continue;
       }
@@ -195,8 +204,8 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       const wait = firstHire - it.start;
       if (wait >= policy.lateOwnerMonths) {
         const message = staffedAt(c.carrier, it.start)
-          ? `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${c.fte.toFixed(2)} FTE meanwhile.`
-          : `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later, and nobody is hired to carry its ${c.fte.toFixed(2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}.`;
+          ? `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later; ${seatTitle(plan, c.carrier)} carries ${fmtFixed(c.fte, 2)} FTE meanwhile.`
+          : `"${it.item.label}" starts ${label(it.start)} but ${seatTitle(plan, c.seat)} arrives ${wait} months later, and nobody is hired to carry its ${fmtFixed(c.fte, 2)} FTE: the load sits on the empty role ${seatTitle(plan, c.carrier)}.`;
         out.push({ code: "W103", severity: "warn", subject: it.item.id, message, hint: "Pull the hire forward, fund a contractor, or move the start." });
       }
     }
@@ -230,11 +239,11 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   }
 
   // W105 cash goes negative.
-  const firstNeg = l.cash.findIndex((c) => c < 0);
+  const firstNeg = l.cash.findIndex((c) => c < -CASH_SLACK);
   if (firstNeg >= 0) {
     let trough = l.cash[firstNeg];
     for (let m = firstNeg + 1; m < l.cash.length; m++) trough = Math.min(trough, l.cash[m]);
-    out.push({ code: "W105", severity: "warn", subject: s.scenario.id, message: `Cash turns negative in ${label(firstNeg)}; trough ${(trough / 1e6).toFixed(2)}M.`, hint: "Funding arrives later than the seats, or the seats arrive earlier than the funding." });
+    out.push({ code: "W105", severity: "warn", subject: s.scenario.id, message: `Cash turns negative in ${label(firstNeg)}; trough ${fmtFixed(trough / 1e6, 2)}M.`, hint: "Funding arrives later than the seats, or the seats arrive earlier than the funding." });
   }
 
   // W106 revenue rests on assumptions.
@@ -243,8 +252,8 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const assumed = plan.streams
     .filter((st) => st.volumeByYear.basis === "A")
     .reduce((n, st) => n + sumRange(l.revenueByStream[st.id], span[0], span[1]), 0);
-  if (total > 0 && assumed / total > policy.assumedRevenueShare) {
-    out.push({ code: "W106", severity: "info", subject: s.scenario.id, message: `${Math.round((assumed / total) * 100)}% of revenue over ${years} years rests on assumed volumes.`, hint: "Land a receipt per stream: a rate card, a signed pilot, a contract." });
+  if (total > 0 && assumed / total > policy.assumedRevenueShare + SLACK) {
+    out.push({ code: "W106", severity: "info", subject: s.scenario.id, message: `${Number(fmtFixed((assumed / total) * 100, 0))}% of revenue over ${years} years rests on assumed volumes.`, hint: "Land a receipt per stream: a rate card, a signed pilot, a contract." });
   }
 
   // W107 first-circle items that end after funding year 1.
@@ -291,13 +300,13 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     if (years >= n) {
       const costRef = byFundingYear(l.cost, cal, n).reduce((a, b) => a + b, 0);
       const ratio = costRef / ref.gross;
-      if (ratio < 1 - policy.referenceCostTolerance || ratio > 1 + policy.referenceCostTolerance) {
-        out.push({ code: "W111", severity: "info", subject: s.scenario.id, message: `${n}-year cost ${(costRef / 1e6).toFixed(1)}M is ${Math.round((ratio - 1) * 100)}% off the reference ${(ref.gross / 1e6).toFixed(1)}M.`, hint: "Labor is derived; the non-labor lines are the assumed part. Reconcile there first." });
+      if (ratio < 1 - policy.referenceCostTolerance - SLACK || ratio > 1 + policy.referenceCostTolerance + SLACK) {
+        out.push({ code: "W111", severity: "info", subject: s.scenario.id, message: `${n}-year cost ${fmtFixed(costRef / 1e6, 1)}M is ${Number(fmtFixed((ratio - 1) * 100, 0))}% off the reference ${fmtFixed(ref.gross / 1e6, 1)}M.`, hint: "Labor is derived; the non-labor lines are the assumed part. Reconcile there first." });
       }
       const nl = byFundingYear(l.nonLabor.map((v, m) => v + l.burn[m]), cal, n).reduce((a, b) => a + b, 0);
       const share = costRef > 0 ? nl / costRef : 0;
-      if (share < ref.nonLaborShare[0] || share > ref.nonLaborShare[1]) {
-        out.push({ code: "W112", severity: "info", subject: s.scenario.id, message: `Non-labor is ${Math.round(share * 100)}% of cost over ${n} years.`, hint: ref.note });
+      if (share < ref.nonLaborShare[0] - SLACK || share > ref.nonLaborShare[1] + SLACK) {
+        out.push({ code: "W112", severity: "info", subject: s.scenario.id, message: `Non-labor is ${Number(fmtFixed(share * 100, 0))}% of cost over ${n} years.`, hint: ref.note });
       }
     }
   }
@@ -311,8 +320,8 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       internalFte += booking.fte;
       if (!Number.isFinite(internalFte)) throw new Error(`plangraph: non-finite internal FTE-months in circle "${last}"`);
     }
-    if (internalFte > policy.lastCircleFteMonths) {
-      out.push({ code: "W115", severity: "info", subject: last, message: `${Number(internalFte.toFixed(2))} internal FTE-months go to work in the last circle (${last}).`, hint: "Fund it separately, or say plainly that the base seats carry it." });
+    if (internalFte > policy.lastCircleFteMonths + SLACK) {
+      out.push({ code: "W115", severity: "info", subject: last, message: `${Number(fmtFixed(internalFte, 2))} internal FTE-months go to work in the last circle (${last}).`, hint: "Fund it separately, or say plainly that the base seats carry it." });
     }
   }
 
@@ -330,14 +339,14 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       }
       if (
         fallback > 0 &&
-        total > policy.principalLoad * seat.capacityFte &&
-        (worst === null || total > worst.total)
+        total > policy.principalLoad * seat.capacityFte + SLACK &&
+        (worst === null || total > worst.total + SLACK)
       ) {
         worst = { month: m, total, fallback };
       }
     }
     if (worst) {
-      out.push({ code: "W116", severity: "warn", subject: seat.id, message: `${seat.title} carries ${worst.total.toFixed(2)} FTE of demand in ${label(worst.month)}; ${percent(worst.fallback / worst.total)} is fallback for unfilled seats.`, hint: "A single point of failure made visible. Shorten the searches or widen the bridge." });
+      out.push({ code: "W116", severity: "warn", subject: seat.id, message: `${seat.title} carries ${fmtFixed(worst.total, 2)} FTE of demand in ${label(worst.month)}; ${percent(worst.fallback / worst.total)} is fallback for unfilled seats.`, hint: "A single point of failure made visible. Shorten the searches or widen the bridge." });
     }
   }
 
