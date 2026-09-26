@@ -986,7 +986,7 @@ describe("levelOn owner", () => {
       fixture({ calendar: year, levelOn: "owner", seats: [role("cto", { hireMonths, unlevelled: true })], items });
     const a = scheduled(plan([4], [own("a", 0.3)]), "a");
     expect(a.start).toBe(4);
-    expect(a.binding).toEqual({ kind: "capacity", seat: "cto", carrier: "cto" });
+    expect(a.binding).toEqual({ kind: "hire", seat: "cto", carrier: "cto" });
     // From its first hire it absorbs: two full-time items held for the hire both start there,
     // and the overload is reported rather than leveled.
     const s = schedule(plan([4], [own("a", 1), own("b", 1)]), LEVELED);

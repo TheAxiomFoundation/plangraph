@@ -3,6 +3,7 @@
 // relaxation does not apply to the plan at hand (no predecessor to remove, say).
 
 import type { Plan, Scenario, Schedule } from "../../src/index";
+import { withoutIgnoredOverrides } from "./arbitraries";
 
 export interface Change {
   plan: Plan;
@@ -22,7 +23,8 @@ export const RELAX: Record<string, Relax> = {
     const per = seat.hireMonths.map((_, j) => (Array.isArray(d0) ? (d0[j] ?? 0) : d0));
     if (Math.max(0, seat.hireMonths[k] + per[k]) === 0) return null;
     per[k] -= 1;
-    return { plan, sc: { ...sc, hireDelay: { ...(sc.hireDelay ?? {}), [seat.id]: per } }, what: `hire ${k} of ${seat.id} one month earlier (hireDelay ${JSON.stringify(per)})` };
+    const next = withoutIgnoredOverrides(plan, { ...sc, hireDelay: { ...(sc.hireDelay ?? {}), [seat.id]: per } });
+    return { plan, sc: next, what: `hire ${k} of ${seat.id} one month earlier (hireDelay ${JSON.stringify(next.hireDelay![seat.id])})` };
   },
   "add a hire": (plan, sc, a, b) => {
     const p = structuredClone(plan);
