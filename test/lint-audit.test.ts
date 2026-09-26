@@ -8,6 +8,7 @@ import {
   schedule,
   type Finding,
   type Plan,
+  type Scenario,
   type SeatDef,
   type WorkItem,
 } from "../src/index";
@@ -80,6 +81,43 @@ describe("defensive lint audit", () => {
     expect(warning).toBeDefined();
     expect(warning!.message).toMatch(/8(?:\.0+)?%/);
     expect(finding({ ...eightPercent, lint: { idleMonths: 6 } }, "W102")).toBeUndefined();
+  });
+
+  it("W102 exempts a hire by its declared month, not the month a scenario moves it to", () => {
+    // One engineer, idle until work arrives in month 6.
+    const plan = (x: Partial<SeatDef>): Plan =>
+      fixture({ seats: [role("x", x)], items: [work("later", { earliest: 6, duration: 3 })] });
+    const w102 = (p: Plan, over: Partial<Scenario>): Finding[] => {
+      const s = schedule(p, { ...AS_PLANNED, id: "moved", ...over });
+      return lintSchedule(p, s, ledger(p, s)).filter((f) => f.code === "W102");
+    };
+
+    // A hire declared in month 2 is checked where it lands, including month 0 when pulled
+    // forward, clamped or not.
+    expect(w102(plan({ hireMonths: [2] }), {}).map((f) => f.message)).toEqual(["x hired 2027-03 peaks at 0% load for its first 4 months."]);
+    expect(w102(plan({ hireMonths: [2] }), { hireDelay: { x: -2 } }).map((f) => f.message)).toEqual(["x hired 2027-01 peaks at 0% load for its first 6 months."]);
+    expect(w102(plan({ hireMonths: [2] }), { hireDelay: { x: -5 } }).map((f) => f.message)).toEqual(["x hired 2027-01 peaks at 0% load for its first 6 months."]);
+
+    // A hire declared in month 0 is in place before the plan, even when a delay moves it,
+    // and exempts only itself: a later hire in the same role is still checked.
+    expect(w102(plan({ hireMonths: [0] }), {})).toEqual([]);
+    expect(w102(plan({ hireMonths: [0] }), { hireDelay: { x: 3 } })).toEqual([]);
+    expect(w102(plan({ hireMonths: [0, 2] }), {}).map((f) => f.message)).toEqual(["x hired 2027-03 peaks at 0% load for its first 4 months."]);
+
+    // After a dropped hire, the declared month comes through hireIndex, not the position.
+    expect(w102(plan({ hireMonths: [0, 5] }), { dropHires: { x: [0] }, hireDelay: { x: [0, -5] } }).map((f) => f.message)).toEqual([
+      "x hired 2027-01 peaks at 0% load for its first 6 months.",
+    ]);
+    expect(w102(plan({ hireMonths: [5, 0] }), { dropHires: { x: [0] } })).toEqual([]);
+
+    // A schedule without hireIndex cannot match hires to declarations, so it falls back to the
+    // month each hire lands rather than pairing a kept hire with a dropped one's month.
+    const dropped = plan({ hireMonths: [0, 2] });
+    const s = schedule(dropped, { ...AS_PLANNED, id: "moved", dropHires: { x: [0] } });
+    const unindexed = { ...s, hireIndex: undefined } as unknown as typeof s;
+    expect(lintSchedule(dropped, unindexed, ledger(dropped, s)).filter((f) => f.code === "W102").map((f) => f.message)).toEqual([
+      "x hired 2027-03 peaks at 0% load for its first 4 months.",
+    ]);
   });
 
   it("D8 triggers W101 on a material two-month peak and honors both overload thresholds", () => {

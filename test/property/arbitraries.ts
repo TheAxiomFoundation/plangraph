@@ -258,7 +258,36 @@ export function buildScenario(plan: Plan, r: RawScenario): Scenario {
   }
   if (r.dropItems && r.dropItems.length) sc.dropItems = [...new Set(r.dropItems.map((k) => plan.items[k % plan.items.length].id))];
   if (r.countFunding && plan.funding.length) sc.countFunding = { [plan.funding[r.countFunding.k % plan.funding.length].id]: r.countFunding.on };
-  return sc;
+  return withoutIgnoredOverrides(plan, sc);
+}
+
+/**
+ * The scenario without the hire overrides the scheduler ignores, which the parser rejects: a
+ * delay or dropped hires on a seat in dropSeats, a delay on a hire in dropHires (0 in a per-hire
+ * list), and a whole-role delay on a role whose every hire is dropped. It schedules exactly as
+ * `sc` does, so generators and changes that combine overrides freely pass through it.
+ */
+export function withoutIgnoredOverrides(plan: Plan, sc: Scenario): Scenario {
+  const out: Scenario = { ...sc };
+  const droppedSeats = new Set(sc.dropSeats ?? []);
+  const hireCount = new Map(plan.seats.map((s) => [s.id, s.hireMonths.length]));
+  if (sc.dropHires) {
+    const dropHires = Object.fromEntries(Object.entries(sc.dropHires).filter(([id]) => !droppedSeats.has(id)));
+    if (Object.keys(dropHires).length) out.dropHires = dropHires;
+    else delete out.dropHires;
+  }
+  if (sc.hireDelay) {
+    const hireDelay: Record<string, number | number[]> = {};
+    for (const [id, d] of Object.entries(sc.hireDelay)) {
+      if (droppedSeats.has(id)) continue;
+      const dropped = out.dropHires?.[id] ?? [];
+      if (Array.isArray(d)) hireDelay[id] = d.map((x, k) => (dropped.includes(k) ? 0 : x));
+      else if (d === 0 || Array.from({ length: hireCount.get(id) ?? 0 }, (_, k) => k).some((k) => !dropped.includes(k))) hireDelay[id] = d;
+    }
+    if (Object.keys(hireDelay).length) out.hireDelay = hireDelay;
+    else delete out.hireDelay;
+  }
+  return out;
 }
 
 /**

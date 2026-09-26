@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { bookingOrder, lintSubstitutions, monthIndex, schedule, tightens, type Plan, type Scenario, type Schedule } from "../src/index";
-import { BROAD, FALLBACKS, arbRawPlan, arbRawScenario, buildPlan, buildScenario, compactPlan, compactScenario, scheduleLine, type GenOpts, type RawPlan, type RawScenario } from "./property/arbitraries";
+import { BROAD, FALLBACKS, arbRawPlan, arbRawScenario, buildPlan, buildScenario, compactPlan, compactScenario, scheduleLine, withoutIgnoredOverrides, type GenOpts, type RawPlan, type RawScenario } from "./property/arbitraries";
 import { later, type Change } from "./property/relaxations";
 import { Admission, TIMEOUT, expectCoverage, holds } from "./property/run";
 
@@ -57,7 +57,8 @@ const TIGHTEN: Record<string, Tighten> = {
     const before = effective(plan, sc, seat.id, per);
     per[k] += 1 + (a % 3);
     if (!firstHireHolds(plan, seat.id, before, effective(plan, sc, seat.id, per))) return null;
-    return { plan, sc: { ...sc, hireDelay: { ...(sc.hireDelay ?? {}), [seat.id]: per } }, what: `hire ${k} of ${seat.id} later (hireDelay ${JSON.stringify(per)})` };
+    const next = withoutIgnoredOverrides(plan, { ...sc, hireDelay: { ...(sc.hireDelay ?? {}), [seat.id]: per } });
+    return { plan, sc: next, what: `hire ${k} of ${seat.id} later (hireDelay ${JSON.stringify(next.hireDelay![seat.id])})` };
   },
   "a dropped hire": (plan, sc, a, b) => {
     const seat = plan.seats[a % plan.seats.length];
@@ -65,7 +66,7 @@ const TIGHTEN: Record<string, Tighten> = {
     const dropped = sc.dropHires?.[seat.id] ?? [];
     if ((sc.dropSeats ?? []).includes(seat.id) || dropped.includes(k)) return null;
     if (!firstHireHolds(plan, seat.id, effective(plan, sc, seat.id), effective(plan, sc, seat.id, undefined, [...dropped, k]))) return null;
-    return { plan, sc: { ...sc, dropHires: { ...(sc.dropHires ?? {}), [seat.id]: [...dropped, k] } }, what: `drop hire ${k} of ${seat.id}` };
+    return { plan, sc: withoutIgnoredOverrides(plan, { ...sc, dropHires: { ...(sc.dropHires ?? {}), [seat.id]: [...dropped, k] } }), what: `drop hire ${k} of ${seat.id}` };
   },
 };
 

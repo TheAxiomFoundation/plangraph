@@ -3,7 +3,7 @@
 // problem with its path; the harness then checks graph-wide meaning.
 
 import { parse as parseYaml } from "yaml";
-import type { Basis, Plan } from "./model.js";
+import { has, type Basis, type Plan } from "./model.js";
 
 const BASES: Basis[] = ["D", "A", "M"];
 
@@ -257,13 +257,31 @@ export function parsePlan(input: unknown): Plan {
         for (const key of ["volumeScale", "durationScale", "effortScale"]) {
           if (scenario[key] !== undefined) need(finite(scenario[key]) && scenario[key] > 0, `${path}.${key}`, "must be a finite number > 0");
         }
+        // A delay or a dropped hire on a seat the scenario drops, and a delay on a hire it drops,
+        // would be ignored by the scheduler, so they are rejected here instead.
+        const droppedSeats = new Set(arr(scenario.dropSeats) ? scenario.dropSeats.filter(nonEmptyString) : []);
+        const droppedHires = (key: string): unknown[] =>
+          isObj(scenario.dropHires) && has(scenario.dropHires, key) && arr(scenario.dropHires[key]) ? scenario.dropHires[key] : [];
         if (scenario.hireDelay !== undefined) {
           need(isObj(scenario.hireDelay), `${path}.hireDelay`, "must be an object");
           if (isObj(scenario.hireDelay)) {
             for (const key of Object.getOwnPropertyNames(scenario.hireDelay)) {
-              need(seatIds.has(key), `${path}.hireDelay.${key}`, "must name a known seat");
+              const at = `${path}.hireDelay.${key}`;
+              need(seatIds.has(key), at, "must name a known seat");
+              need(!droppedSeats.has(key), at, "must not name a seat in dropSeats");
               const d: unknown = scenario.hireDelay[key];
-              need(integer(d) || (arr(d) && d.every((x: unknown) => integer(x))), `${path}.hireDelay.${key}`, "must be an integer, or one integer per hire");
+              need(integer(d) || arr(d), at, "must be an integer, or one integer per hire");
+              const hireCount = hireCounts.get(key);
+              const dropped = droppedHires(key);
+              if (integer(d) && d !== 0 && hireCount !== undefined && hireCount > 0) {
+                need(!Array.from({ length: hireCount }, (_, k) => k).every((k) => dropped.includes(k)), at, "must be 0 when dropHires drops every hire");
+              }
+              if (!arr(d)) continue;
+              need(hireCount === undefined || d.length <= hireCount, at, "must have no more entries than the seat's hireMonths");
+              for (let k = 0; k < d.length; k++) {
+                need(integer(d[k]), `${at}[${k}]`, "must be an integer");
+                if (integer(d[k]) && d[k] !== 0) need(!dropped.includes(k), `${at}[${k}]`, "must be 0 for a hire in dropHires");
+              }
             }
           }
         }
@@ -271,20 +289,22 @@ export function parsePlan(input: unknown): Plan {
           need(isObj(scenario.dropHires), `${path}.dropHires`, "must be an object");
           if (isObj(scenario.dropHires)) {
             for (const key of Object.getOwnPropertyNames(scenario.dropHires)) {
-              need(seatIds.has(key), `${path}.dropHires.${key}`, "must name a known seat");
+              const at = `${path}.dropHires.${key}`;
+              need(seatIds.has(key), at, "must name a known seat");
+              need(!droppedSeats.has(key), at, "must not name a seat in dropSeats");
               const hireCount = hireCounts.get(key);
               const ks: unknown = scenario.dropHires[key];
-              need(arr(ks) && ks.every((k: unknown) => integer(k) && (k as number) >= 0 && (hireCount === undefined || (k as number) < hireCount)), `${path}.dropHires.${key}`, "must list indices into the seat's hireMonths");
+              need(arr(ks) && Array.from(ks).every((k: unknown) => integer(k) && k >= 0 && (hireCount === undefined || k < hireCount)), at, "must list indices into the seat's hireMonths");
             }
           }
         }
         if (scenario.dropItems !== undefined) {
           need(arr(scenario.dropItems), `${path}.dropItems`, "must be an array of item ids");
-          if (arr(scenario.dropItems)) scenario.dropItems.forEach((id: unknown, k: number) => need(typeof id === "string" && itemIds.has(id), `${path}.dropItems[${k}]`, "must name a known item"));
+          if (arr(scenario.dropItems)) Array.from(scenario.dropItems).forEach((id: unknown, k: number) => need(typeof id === "string" && itemIds.has(id), `${path}.dropItems[${k}]`, "must name a known item"));
         }
         if (scenario.dropSeats !== undefined) {
           need(arr(scenario.dropSeats), `${path}.dropSeats`, "must be an array of seat ids");
-          if (arr(scenario.dropSeats)) scenario.dropSeats.forEach((id, k) => need(typeof id === "string" && seatIds.has(id), `${path}.dropSeats[${k}]`, "must name a known seat"));
+          if (arr(scenario.dropSeats)) Array.from(scenario.dropSeats).forEach((id, k) => need(typeof id === "string" && seatIds.has(id), `${path}.dropSeats[${k}]`, "must name a known seat"));
         }
         if (scenario.countFunding !== undefined) {
           need(isObj(scenario.countFunding), `${path}.countFunding`, "must be an object");

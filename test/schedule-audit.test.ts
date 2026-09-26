@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AS_PLANNED,
   LEVELED,
+  hireMonthlyCost,
   ledger,
   lintAll,
   lintPlan,
@@ -932,5 +933,221 @@ describe("demand profiles", () => {
     expect(scheduled(owner, "a", LEVELED).start).toBe(0);
     const ownerLate = fixture({ ...all, levelOn: "owner", seats: [role("x", { hireMonths: [3] }), role("y")] });
     expect(scheduled(ownerLate, "a", LEVELED).start).toBe(3);
+  });
+});
+
+const year = { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 };
+
+describe("an unlevelled seat with a seat fallback", () => {
+  const seats = (fallback: SeatDef["fallback"]) => [role("x"), role("y"), role("cto", { hireMonths: [4], unlevelled: true, fallback })];
+  const busy = (duration: number) => work("busy", { duration });
+
+  it("holds an item it owns for room on the fallback, not for its hire", () => {
+    const owned = work("owned", { duration: 2, demands: [{ seat: "cto", fte: 0.5, basis: "A" }] });
+    const plan = fixture({ calendar: year, seats: seats("x"), items: [busy(2), owned] });
+    const leveled = scheduled(plan, "owned");
+    expect(leveled.start).toBe(2);
+    expect(leveled.binding).toEqual({ kind: "capacity", seat: "cto", carrier: "x" });
+    expect(leveled.carriers).toEqual([{ seat: "cto", carrier: "x", fte: 0.5 }]);
+    // With room on the fallback it starts at once, four months before the hire.
+    expect(scheduled(fixture({ calendar: year, seats: seats("x"), items: [owned] }), "owned").start).toBe(0);
+    // With no fallback the same item waits for the hire.
+    expect(scheduled(fixture({ calendar: year, seats: seats(null), items: [busy(2), owned] }), "owned").start).toBe(4);
+  });
+
+  it("levels its contribution to another seat's item on the fallback until the hire", () => {
+    const helped = work("helped", {
+      duration: 2,
+      owner: "y",
+      demands: [
+        { seat: "y", fte: 0.5, basis: "A" },
+        { seat: "cto", fte: 0.2, basis: "A" },
+      ],
+    });
+    const plan = fixture({ calendar: year, seats: seats("x"), items: [busy(2), helped] });
+    const leveled = scheduled(plan, "helped");
+    expect(leveled.start).toBe(2);
+    expect(leveled.binding).toEqual({ kind: "capacity", seat: "cto", carrier: "x" });
+    // From its hire the seat carries its own contribution, so a fallback busy past month 4 holds
+    // the item only until then...
+    expect(scheduled(fixture({ calendar: year, seats: seats("x"), items: [busy(6), helped] }), "helped").start).toBe(4);
+    // ...even when the hired seat is full: once hired it absorbs rather than levels.
+    const full = work("full", { earliest: 4, duration: 2, priority: -1, demands: [{ seat: "cto", fte: 1, basis: "A" }] });
+    expect(scheduled(fixture({ calendar: year, seats: seats("x"), items: [full, busy(6), helped] }), "helped").start).toBe(4);
+    // With no fallback the contribution is unstaffed and holds nothing.
+    expect(scheduled(fixture({ calendar: year, seats: seats(null), items: [busy(2), helped] }), "helped").start).toBe(0);
+  });
+});
+
+describe("levelOn owner", () => {
+  it("binds an unlevelled owner only before its first hire", () => {
+    const own = (id: string, fte: number) => work(id, { duration: 2, demands: [{ seat: "cto", fte, basis: "A" }] });
+    const plan = (hireMonths: number[], items: WorkItem[]) =>
+      fixture({ calendar: year, levelOn: "owner", seats: [role("cto", { hireMonths, unlevelled: true })], items });
+    const a = scheduled(plan([4], [own("a", 0.3)]), "a");
+    expect(a.start).toBe(4);
+    expect(a.binding).toEqual({ kind: "hire", seat: "cto", carrier: "cto" });
+    // From its first hire it absorbs: two full-time items held for the hire both start there,
+    // and the overload is reported rather than leveled.
+    const s = schedule(plan([4], [own("a", 1), own("b", 1)]), LEVELED);
+    expect(s.items.map((it) => it.start)).toEqual([4, 4]);
+    expect(overloads(s)).toEqual([{ seat: "cto", months: [4, 5], peak: 1 }]);
+    // A second hire still to come holds nothing.
+    expect(schedule(plan([4, 8], [own("a", 1), own("b", 1), own("c", 1)]), LEVELED).items.map((it) => it.start)).toEqual([4, 4, 4]);
+  });
+
+  it("binds a contributor's demand that falls back onto the owner's seat", () => {
+    const items = [
+      work("task", {
+        duration: 2,
+        owner: "x",
+        demands: [
+          { seat: "x", fte: 0.6, basis: "A" },
+          { seat: "aide", fte: 0.6, basis: "A" },
+        ],
+      }),
+    ];
+    const plan = fixture({ calendar: year, levelOn: "owner", seats: [role("x"), role("aide", { hireMonths: [4], fallback: "x" })], items });
+    const task = scheduled(plan, "task");
+    expect(task.start).toBe(4);
+    // What binds is the owner's carrier; the contributor's id sorts first, so the binding names its seat.
+    expect(task.binding).toEqual({ kind: "capacity", seat: "aide", carrier: "x" });
+    // Without the fallback, aide's demand stays on its own empty seat, a contributor, and holds nothing.
+    expect(scheduled(fixture({ calendar: year, levelOn: "owner", seats: [role("x"), role("aide", { hireMonths: [4] })], items }), "task").start).toBe(0);
+  });
+
+  it("does not bind the owner's own demand while a fallback carries it", () => {
+    const seats = [role("x"), role("y", { hireMonths: [4], fallback: "x" })];
+    const items = [work("busy", { duration: 2 }), work("owned", { duration: 2, demands: [{ seat: "y", fte: 0.5, basis: "A" }] })];
+    const plan = fixture({ calendar: year, levelOn: "owner", seats, items });
+    const owned = scheduled(plan, "owned");
+    expect(owned.start).toBe(0);
+    expect(owned.carriers).toEqual([{ seat: "y", carrier: "x", fte: 0.5 }]);
+    expect(overloads(schedule(plan, LEVELED))).toEqual([{ seat: "x", months: [0, 1], peak: 0.5 }]);
+    // Leveling on every seat waits for room on the fallback instead.
+    expect(scheduled(fixture({ calendar: year, seats, items }), "owned").start).toBe(2);
+  });
+
+  it("lists a contributor overload below the W101 thresholds in overloads without W101", () => {
+    const plan = (duration: number) =>
+      fixture({
+        calendar: year,
+        levelOn: "owner",
+        seats: [role("x"), role("y")],
+        items: [
+          work("load", { duration, demands: [{ seat: "y", fte: 1, basis: "A" }] }),
+          work("task", {
+            duration,
+            owner: "x",
+            demands: [
+              { seat: "x", fte: 0.5, basis: "A" },
+              { seat: "y", fte: 0.2, basis: "A" },
+            ],
+          }),
+        ],
+      });
+    const w101 = (p: Plan) => {
+      const s = schedule(p, LEVELED);
+      return lintAll(p, s, ledger(p, s)).filter((f) => f.code === "W101");
+    };
+    const short = plan(2);
+    expect(scheduled(short, "task").start).toBe(0);
+    const [overload, ...rest] = overloads(schedule(short, LEVELED));
+    expect(rest).toEqual([]);
+    expect(overload).toMatchObject({ seat: "y", months: [0, 1] });
+    expect(overload.peak).toBeCloseTo(0.2, 12);
+    expect(w101(short)).toEqual([]); // two months, +0.2 FTE: under both default thresholds
+    expect(w101(plan(3)).map((f) => f.subject)).toEqual(["y"]); // a third month reaches overloadMonths
+  });
+});
+
+describe("booking order", () => {
+  it("moves no start by priority when the scenario does not level", () => {
+    const items = (priority?: number) => [work("a", { duration: 2 }), work("b", { duration: 2, priority })];
+    const plain = schedule(fixture({ items: items() }), AS_PLANNED);
+    expect(plain.items.map((it) => it.start)).toEqual([0, 0]);
+    expect(plain.loads[0].demand).toEqual([2, 2, 0, 0, 0, 0]);
+    // Booked ahead of a (-1) or behind it (1), b starts with it: only leveling moves work.
+    // (The bookings list still comes out in priority order.)
+    for (const priority of [-1, 1]) {
+      const prioritized = schedule(fixture({ items: items(priority) }), AS_PLANNED);
+      expect(prioritized.items.map((it) => [it.start, it.end, it.binding])).toEqual(plain.items.map((it) => [it.start, it.end, it.binding]));
+      expect(prioritized.loads).toEqual(plain.loads);
+    }
+    // The same priority decides the order once the scenario levels.
+    expect(scheduled(fixture({ items: items(-1) }), "a").start).toBe(2);
+  });
+
+  it("books an earlier circle ahead of a later circle's lower priority", () => {
+    const plan = fixture({
+      circles: ["core", "later"],
+      items: [work("a", { duration: 2, circle: "later", priority: -10 }), work("b", { duration: 2, priority: 10 })],
+    });
+    expect(scheduled(plan, "b").start).toBe(0);
+    const a = scheduled(plan, "a");
+    expect(a.start).toBe(2);
+    expect(a.binding).toEqual({ kind: "capacity", seat: "x", carrier: "x" });
+  });
+
+  it("takes a successor's predecessors in id order, whatever their priority", () => {
+    const predecessors = [work("pa", { duration: 2, priority: 5 }), work("pb", { duration: 2, priority: -5 })];
+    const alone = fixture({ items: predecessors });
+    expect([scheduled(alone, "pa").start, scheduled(alone, "pb").start]).toEqual([2, 0]);
+    // A higher-priority successor pulls its predecessors in ahead of it, by id: pa first.
+    const pulled = fixture({ items: [...predecessors, work("s", { priority: -10, predecessors: [{ id: "pb" }, { id: "pa" }] })] });
+    expect([scheduled(pulled, "pa").start, scheduled(pulled, "pb").start]).toEqual([0, 2]);
+    const s = scheduled(pulled, "s");
+    expect(s.start).toBe(4);
+    expect(s.binding).toEqual({ kind: "predecessor", id: "pb" });
+  });
+});
+
+describe("dropItems", () => {
+  it("runs an underway dependent of a dropped item and takes a standing one beyond", () => {
+    const plan = fixture({
+      seats: [role("x", { capacityFte: 3 })],
+      items: [
+        work("a", { duration: 2 }),
+        work("u", { earliest: 1, duration: 2, underway: true, predecessors: [{ id: "a" }] }),
+        work("st", { standing: true, predecessors: [{ id: "a" }] }),
+      ],
+    });
+    expect(scheduled(plan, "st", AS_PLANNED).start).toBe(2); // with a, st starts when a ends
+    for (const level of [false, true]) {
+      const s = schedule(plan, { ...AS_PLANNED, id: "drop", level, dropItems: ["a"] });
+      const byId = (id: string) => s.items.find((it) => it.item.id === id)!;
+      expect(byId("u")).toMatchObject({ start: 1, end: 3, duration: 2, beyond: false, binding: { kind: "underway" } });
+      expect(s.bookings.filter((b) => b.item === "u").map((b) => b.month)).toEqual([1, 2]);
+      expect(byId("st")).toMatchObject({ start: 6, end: 6, duration: 0, beyond: true, binding: { kind: "predecessor", id: "a" }, carriers: [] });
+      expect(byId("st").dropped).toBeUndefined();
+      expect(s.bookings.filter((b) => b.item === "st")).toEqual([]);
+    }
+  });
+});
+
+describe("loadedAnnualByHire", () => {
+  it("uses year 1 before the funding year opens and escalates only the role's rate", () => {
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 30, fundingYearStartMonth: 3 },
+      escalation: { rate: 0.1, basis: "A" },
+      seats: [role("x", { hireMonths: [0, 0], loadedAnnualByHire: [[6_000, 24_000], null] })],
+    });
+    const seat = plan.seats[0];
+    const labor = ledger(plan, schedule(plan, AS_PLANNED)).labor;
+    // Months 0-2 precede funding year 1 (months 3-14) and cost the same as it: the hire's own
+    // year-1 value, not the role's 12,000, and the role's unescalated rate for the null hire.
+    for (const m of [0, 2, 3, 14]) {
+      expect(hireMonthlyCost(plan, seat, 0, m)).toBeCloseTo(500, 9);
+      expect(hireMonthlyCost(plan, seat, 1, m)).toBeCloseTo(1_000, 9);
+      expect(labor[m]).toBeCloseTo(1_500, 9);
+    }
+    // Year 2: the hire's own second value, unescalated; the null hire at the role's rate escalated once.
+    expect(hireMonthlyCost(plan, seat, 0, 15)).toBeCloseTo(2_000, 9);
+    expect(hireMonthlyCost(plan, seat, 1, 15)).toBeCloseTo(1_100, 9);
+    expect(labor[15]).toBeCloseTo(3_100, 9);
+    // Year 3: the hire's schedule holds its last value, still unescalated; the role's rate escalates again.
+    expect(hireMonthlyCost(plan, seat, 0, 27)).toBeCloseTo(2_000, 9);
+    expect(hireMonthlyCost(plan, seat, 1, 27)).toBeCloseTo(1_210, 9);
+    expect(labor[27]).toBeCloseTo(3_210, 9);
   });
 });

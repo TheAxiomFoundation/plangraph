@@ -241,11 +241,21 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
   }
 
-  // W102 idle seats: hired after the plan starts, then under the configured share of
-  // actual capacity for the configured number of months.
+  // W102 idle seats: a hire declared after month 0, then under the configured share of
+  // actual capacity for the configured number of months in a row from the month it lands.
+  // Whether a hire was in place before the plan is the plan's fact, not the scenario's: a
+  // hire declared at month 0 is exempt wherever a delay moves it, and a later hire that a
+  // negative delay pulls onto month 0 is still checked. A schedule without hireIndex cannot
+  // say which declared hire is which, so it falls back to the month the hire lands.
+  const declaredHires = new Map(plan.seats.map((seat) => [seat.id, seat.hireMonths]));
   for (const load of s.loads) {
-    for (const h of s.hires[load.seat] ?? []) {
-      if (h === 0) continue;
+    const hires = s.hires[load.seat] ?? [];
+    const index = s.hireIndex?.[load.seat];
+    const declared = declaredHires.get(load.seat) ?? [];
+    for (let j = 0; j < hires.length; j++) {
+      const h = hires[j];
+      const k = index?.[j];
+      if ((k === undefined ? h : declared[k] ?? h) === 0) continue;
       let idle = 0;
       let peakShare = 0;
       for (let m = h; m < H; m++) {

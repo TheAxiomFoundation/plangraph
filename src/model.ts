@@ -60,7 +60,10 @@ export interface SeatDef {
    */
   loadedAnnualByHire?: (number[] | null)[];
   costBasis: Basis;
-  /** Month index each seat in the role is hired. Seats in place before the plan use 0. */
+  /**
+   * Month index each seat in the role is hired. Seats in place before the plan use 0; W102
+   * exempts a hire declared at 0 from its idle check wherever a scenario moves it.
+   */
   hireMonths: number[];
   /** Capacity of one seat, in FTE. */
   capacityFte: number;
@@ -179,7 +182,7 @@ export interface LintPolicy {
   overloadMonths: number;
   /** ...or by at least this many FTE in any month. */
   overloadPeakFte: number;
-  /** W102: a hire after month 0 whose role stays below the configured load share for this many months in a row, from its hire month, is flagged idle. */
+  /** W102: a hire declared after month 0 whose role stays below the configured load share for this many months in a row, from the month it lands in the scenario, is flagged idle. */
   idleMonths: number;
   /** W102: share of actual capacity below which a new hire is idle. */
   idleLoadShare: number;
@@ -219,12 +222,15 @@ export interface Scenario {
   gist: string;
   /**
    * Whole months added to every hire in the role, or one delay per hire (index-aligned with
-   * hireMonths, missing entries 0); negative pulls forward. Keys are seat ids.
+   * hireMonths, no longer than it, missing entries 0); negative pulls forward, to month 0 at
+   * the earliest. Keys are seat ids, never one in dropSeats. A delay must land on a hire the
+   * scenario keeps: a hire in dropHires takes no delay of its own (its entry, if any, is 0),
+   * and a role whose every hire is dropped takes no whole-role delay but 0.
    */
   hireDelay?: Record<SeatId, number | number[]>;
   /** Roles that do not exist in this scenario: never hired, never costed; their demand goes to their fallback, or, with fallback null, stays on the empty role. */
   dropSeats?: SeatId[];
-  /** Individual hires that do not exist in this scenario: indices into the role's hireMonths. */
+  /** Individual hires that do not exist in this scenario: indices into the role's hireMonths. Keys are seat ids, never one in dropSeats. */
   dropHires?: Record<SeatId, number[]>;
   /** Items that do not exist in this scenario (a pilot whose funding is not counted, say): no run, no bookings, no scenario findings of their own; planned dependents go beyond the horizon. */
   dropItems?: string[];
