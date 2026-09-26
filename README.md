@@ -95,13 +95,14 @@ takes its planned dependents with it. Standing work runs from its scheduled star
 horizon.
 
 When leveling moves a start, its binding says what the item waited for, judged in the first
-month the last refused start was short of room, on the seat shortest of room then: `capacity`
-when that seat had someone hired and no room, or `hire` when nobody was hired yet to carry a
-demand the item made of it there, on the seat itself or anywhere along the seat's fallback
-chain. W104 prints a `hire` binding as a wait for that hire, with the month it lands, since
+month the last refused start was short of room, on the seat shortest of room then: `hire`
+when nobody was hired yet to carry a demand the item made of it there, on the seat itself or
+anywhere along the seat's fallback chain, and otherwise `capacity` (someone was hired and there
+was no room, or the item asked nothing of that seat that month). W104 prints a `hire` binding as a wait for that hire, with the month it lands, since
 the hire date and not the seat's workload is what moves the item. A pooled role that is full
 until its next hire is still `capacity`: someone is there, and there is no room. So is
-standing work refused only in the horizon's last month, since a later start drops that month.
+standing work that a later start fits once it drops the horizon's last month, the only month
+that start was short in.
 
 An item beyond the horizon says why in its binding, and W104 repeats it: a predecessor that
 never finishes; the horizon, when the run is longer than the months left after its declared

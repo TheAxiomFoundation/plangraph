@@ -53,11 +53,12 @@ describe("P2 explanations, replayed against an independent oracle", () => {
   }, TIMEOUT);
 
   it("P2.hire: a hire binding keeps its promise, scheduled or beyond the horizon", () => {
-    // A leveled move or a capacity beyond is a hire, not a capacity, binding when the run's first
-    // month found nobody hired to the carrier short of room, and the item asked something of it
-    // (P2.binding checks the kind). Then the role carrying the named seat's demand at the start
-    // is first hired in the start month; or, beyond the horizon, nobody on the seat's fallback
-    // chain is hired by the last month the run could start. W104's hire text says exactly this.
+    // A leveled move or a capacity beyond is a hire, not a capacity, binding when, in the first
+    // short month of the last start refused, the carrier shortest of room had nobody hired and
+    // the item asked something of it (P2.binding checks the kind). Then nobody on the named
+    // seat's fallback chain is hired by that month; for a scheduled item the first of them is
+    // hired the month after it, at or after the start, and beyond the horizon none is hired in
+    // time for the last month the run could start. W104's hire text says exactly this.
     const broad = clauseHolds("P2.hire", BROAD, checkSchedule);
     expectCoverage("a planned item leveling held for a hire", broad.hits.hireWaits, broad.runs, 0.02);
     expectCoverage("an item leveling kept beyond the horizon waiting for a hire", broad.hits.hireTooLate, broad.runs, 0.06);

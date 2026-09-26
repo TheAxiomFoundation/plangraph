@@ -248,7 +248,7 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
    * Whether the whole run fits from `start`; on failure, the horizon, or else the carrier with
    * the largest shortfall in the first month short of room: a hire when that carrier has nobody
    * hired that month and the item asks something of it (for standing work, in a month before
-   * the horizon's last); else capacity.
+   * the horizon's last, or from the last start there is); else capacity.
    */
   const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; why: Blocked } => {
     if (!i.standing && start + duration > H) return { ok: false, why: { kind: "horizon" } };
@@ -291,9 +291,10 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
         // Nobody hired to carry a demand is a wait for a hire. The seat named is one whose own
         // demand lands there that month, so the run one month later, which asks the same of that
         // seat a month later, fits only once someone on its fallback chain is hired. Standing
-        // work is the exception in the horizon's last month: a later start drops that month.
+        // work short only in the horizon's last month is the exception, unless this is the last
+        // start there is: a later start drops that month, so the item may fit with no hire.
         const asking = landed.get(worst.carrier)!.asking;
-        if (asking !== null && seatsHired(hires[worst.carrier], m) === 0 && (!i.standing || m + 1 < H)) {
+        if (asking !== null && seatsHired(hires[worst.carrier], m) === 0 && (!i.standing || m + 1 < H || start === H - 1)) {
           return { ok: false, why: { kind: "hire", seat: asking, carrier: worst.carrier } };
         }
         return { ok: false, why: { kind: "capacity", seat: worst.seat, carrier: worst.carrier } };

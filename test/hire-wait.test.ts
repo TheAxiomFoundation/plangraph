@@ -140,6 +140,20 @@ describe("an item that waits for a hire", () => {
     expect(at(plan, "keep")).toMatchObject({ start: 1, binding: { kind: "capacity", seat: "s0", carrier: "s0" } });
   });
 
+  it("calls standing work a hire wait when its seat is never hired inside the horizon", () => {
+    // Every start is refused, the last one in the horizon's only remaining month: no later start
+    // exists to drop it, so the wait is for a hire that never comes.
+    const plan = fixture({
+      seats: [role("cto", { title: "CTO", unlevelled: true, hireMonths: [20] })],
+      items: [work("ops", { label: "Ops", standing: true, demands: [{ seat: "cto", fte: 0.5, basis: "A" }] })],
+    });
+    expect(at(plan, "ops")).toMatchObject({ beyond: true, binding: { kind: "hire", seat: "cto", carrier: "cto" } });
+    expect(w104(plan, "ops")).toMatchObject({
+      message: '"Ops" does not fit inside the horizon: this scenario does not hire CTO inside the horizon.',
+      hint: "Hire CTO inside the horizon, or drop the item.",
+    });
+  });
+
   it("does not call it a hire when the item asks nothing of the empty role that month", () => {
     // Underway work already sits on c, which nobody fills until month 4. a's first quarter asks
     // nothing of c; what keeps it out is c's other load, so the binding is capacity.
