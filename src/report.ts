@@ -2,7 +2,7 @@
 // prints it; a program can take it as data.
 
 import { afterFundingYears, atFundingYearEnd, beforeFunding, byFundingYear, fundingYears, ledger, sumRange, type Ledger } from "./economics.js";
-import { countBy, lintPlan, lintSchedule, type Finding, type Severity } from "./lint.js";
+import { countBy, lintPlan, lintSchedule, lintSubstitutions, tightenedFrom, type Finding, type Severity } from "./lint.js";
 import { monthLabel, scenariosOf, table, type Plan, type Scenario } from "./model.js";
 import { overloads, schedule, slips, type Schedule, type Slip } from "./schedule.js";
 
@@ -50,12 +50,19 @@ export function report(plan: Plan, only?: string): Report {
   const all = scenariosOf(plan);
   const selected = only ? all.find((scenario) => scenario.id === only) : undefined;
   if (only && !selected) throw new Error(`plangraph: unknown scenario "${only}"`);
-  const base = schedule(plan, all[0]);
+  // Each scenario is scheduled once, whether it is reported or only compared against.
+  const schedules = new Map<Scenario, Schedule>();
+  const scheduleOf = (sc: Scenario): Schedule => {
+    let s = schedules.get(sc);
+    if (!s) schedules.set(sc, (s = schedule(plan, sc)));
+    return s;
+  };
+  const base = scheduleOf(all[0]);
   const out: ScenarioReport[] = [];
   for (const sc of selected ? [selected] : all) {
-    const s = sc === all[0] ? base : schedule(plan, sc);
+    const s = scheduleOf(sc);
     const l = ledger(plan, s);
-    const findings = lintSchedule(plan, s, l);
+    const findings = [...lintSchedule(plan, s, l), ...tightenedFrom(plan, all, sc, scheduleOf).flatMap((looser) => lintSubstitutions(plan, s, scheduleOf(looser)))];
     let trough = l.cash[0] ?? plan.openingCash ?? 0;
     let troughMonth = 0;
     for (let m = 1; m < l.cash.length; m++) {
