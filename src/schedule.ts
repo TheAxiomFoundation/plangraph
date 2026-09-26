@@ -17,7 +17,9 @@
 // Every start records the constraint that bound it, and an item beyond the horizon records
 // why: a predecessor that never finishes; the horizon, when the run is longer than the months
 // left after its declared start and its predecessors; or else the seat leveling last found
-// full. A dropped item's binding is "dropped". Deterministic: same inputs, same output.
+// full. When the seat shortest of room has nobody hired yet and the item asks something of it,
+// the binding is a hire, not capacity. A dropped item's binding is "dropped". Deterministic:
+// same inputs, same output.
 
 import { has, ownerOf, table, type Plan, type Scenario, type SeatDef, type SeatId, type WorkItem, demandAt } from "./model.js";
 
@@ -26,11 +28,21 @@ export type Binding =
   | { kind: "underway" }
   | { kind: "predecessor"; id: string }
   | { kind: "capacity"; seat: SeatId; carrier: SeatId }
+  /**
+   * Leveling waited because nobody was hired to carry the demand for `seat`: in the first
+   * month short of room of the last start that failed, that demand, more than nothing, landed
+   * on `carrier`, a role with no hire yet (the seat itself, or the end of its fallback chain),
+   * and that role was the one shortest of room. So nobody on the seat's fallback chain is hired
+   * by that month. For a scheduled item, the first of them is hired the month after it, at or
+   * after the start. For an item beyond the horizon, none is hired by the last month its run
+   * could start.
+   */
+  | { kind: "hire"; seat: SeatId; carrier: SeatId }
   | { kind: "horizon" }
   | { kind: "dropped" };
 
 /** Why a run does not fit from a given start when leveling. */
-type Blocked = Extract<Binding, { kind: "capacity" } | { kind: "horizon" }>;
+type Blocked = Extract<Binding, { kind: "capacity" } | { kind: "hire" } | { kind: "horizon" }>;
 
 export interface Scheduled {
   item: WorkItem;
@@ -232,19 +244,28 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
       fte: finiteResult(demandAt(d, m - start) * eff, `demand for item "${i.id}" and seat "${d.seat}"`),
     }));
 
-  /** Whether the whole run fits from `start`; on failure, the horizon, or else the carrier with the largest shortfall in the first month short of room. */
+  /**
+   * Whether the whole run fits from `start`; on failure, the horizon, or else the carrier with
+   * the largest shortfall in the first month short of room: a hire when that carrier has nobody
+   * hired that month and the item asks something of it (for standing work, in a month before
+   * the horizon's last, or from the last start there is); else capacity.
+   */
   const fits = (i: WorkItem, start: number, duration: number): { ok: true } | { ok: false; why: Blocked } => {
     if (!i.standing && start + duration > H) return { ok: false, why: { kind: "horizon" } };
     for (let m = start; m < Math.min(start + duration, H); m++) {
-      const landed = new Map<SeatId, { fte: number; seat: SeatId }>();
+      // Per carrier: the demand landed, the first seat by id, and the first seat by id whose
+      // own demand this month is more than nothing (a profile can ask for zero).
+      const landed = new Map<SeatId, { fte: number; seat: SeatId; asking: SeatId | null }>();
       for (const p of placements(i, m, start)) {
         if (p.carrier === "external") continue;
+        const asks = p.fte > 1e-9;
         const cur = landed.get(p.carrier);
         if (cur) {
           cur.fte = finiteResult(cur.fte + p.fte, `landed demand on seat "${p.carrier}" at month ${m}`);
           if (p.seat < cur.seat) cur.seat = p.seat;
+          if (asks && (cur.asking === null || p.seat < cur.asking)) cur.asking = p.seat;
         } else {
-          landed.set(p.carrier, { fte: p.fte, seat: p.seat });
+          landed.set(p.carrier, { fte: p.fte, seat: p.seat, asking: asks ? p.seat : null });
         }
       }
       let worst: { short: number; seat: SeatId; carrier: SeatId } | null = null;
@@ -266,7 +287,18 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
           worst = { short, seat: demand.seat, carrier };
         }
       }
-      if (worst) return { ok: false, why: { kind: "capacity", seat: worst.seat, carrier: worst.carrier } };
+      if (worst) {
+        // Nobody hired to carry a demand is a wait for a hire. The seat named is one whose own
+        // demand lands there that month, so the run one month later, which asks the same of that
+        // seat a month later, fits only once someone on its fallback chain is hired. Standing
+        // work short only in the horizon's last month is the exception, unless this is the last
+        // start there is: a later start drops that month, so the item may fit with no hire.
+        const asking = landed.get(worst.carrier)!.asking;
+        if (asking !== null && seatsHired(hires[worst.carrier], m) === 0 && (!i.standing || m + 1 < H || start === H - 1)) {
+          return { ok: false, why: { kind: "hire", seat: asking, carrier: worst.carrier } };
+        }
+        return { ok: false, why: { kind: "capacity", seat: worst.seat, carrier: worst.carrier } };
+      }
     }
     return { ok: true };
   };
@@ -322,15 +354,16 @@ export function schedule(plan: Plan, scenario: Scenario): Schedule {
     }
     if (!beyond && !i.underway) {
       if (scenario.level) {
-        // Probe forward a month at a time. The binding is the last seat found without room; if
-        // there is none, every probe overshot the horizon, and the horizon binds.
+        // Probe forward a month at a time. The binding is the last seat found without room, or
+        // without anyone hired; if there is none, every probe overshot the horizon, and the
+        // horizon binds.
         let probe = start;
-        let full: Extract<Blocked, { kind: "capacity" }> | null = null;
+        let full: Extract<Blocked, { kind: "capacity" } | { kind: "hire" }> | null = null;
         for (; probe < H; probe++) {
           duration = durationOf(i, probe);
           const f = fits(i, probe, duration);
           if (f.ok) break;
-          if (f.why.kind === "capacity") full = f.why;
+          if (f.why.kind !== "horizon") full = f.why;
         }
         if (probe >= H) {
           beyond = true;

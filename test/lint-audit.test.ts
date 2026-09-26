@@ -320,7 +320,7 @@ describe("W101 under leveling names the load leveling does not wait for", () => 
       const hired = fixture({ levelOn, seats: [role("ceo", { unlevelled: true, hireMonths: [3] })], items });
       const found = leveled(hired);
       expect(found.find((f) => f.code === "W101" && f.subject === "ceo")!.hint).toBe(hint);
-      expect(found.find((f) => f.code === "W104" && f.subject === "a")!.message).toBe('"a" starts 3 months after its declared 2027-01: no room on ceo.');
+      expect(found.find((f) => f.code === "W104" && f.subject === "a")!.message).toBe('"a" starts 3 months after its declared 2027-01: waits for the ceo hire in 2027-04.');
     }
   });
 });

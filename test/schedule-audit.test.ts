@@ -247,24 +247,32 @@ describe("defensive schedule audit", () => {
     expect(right.binding).toEqual(left.binding);
   });
 
-  it("A5 chooses the same equal-shortfall capacity binding after demand permutation", () => {
-    const make = (demands: WorkItem["demands"]): Plan =>
-      fixture({
-        seats: [role("x", { hireMonths: [1] }), role("y", { hireMonths: [1] })],
-        items: [work("both", { owner: "x", demands })],
-      });
+  it("A5 chooses the same equal-shortfall binding after demand permutation", () => {
     const xy = [
       { seat: "x", fte: 1, basis: "A" as const },
       { seat: "y", fte: 1, basis: "A" as const },
     ];
+    // Both seats hired, and both full in month 0 with another item's work.
+    const full = (demands: WorkItem["demands"]): Plan =>
+      fixture({
+        seats: [role("x"), role("y")],
+        items: [work("busy", { priority: -1, duration: 1, demands: xy }), work("both", { owner: "x", demands })],
+      });
+    // Nobody hired to either seat until month 1.
+    const unhired = (demands: WorkItem["demands"]): Plan =>
+      fixture({
+        seats: [role("x", { hireMonths: [1] }), role("y", { hireMonths: [1] })],
+        items: [work("both", { owner: "x", demands })],
+      });
 
-    const left = scheduled(make(xy), "both");
-    const right = scheduled(make([...xy].reverse()), "both");
-
-    expect(left.start).toBe(1);
-    expect(right.start).toBe(1);
-    expect(left.binding).toEqual({ kind: "capacity", seat: "x", carrier: "x" });
-    expect(right.binding).toEqual(left.binding);
+    for (const [make, kind] of [[full, "capacity"], [unhired, "hire"]] as const) {
+      const left = scheduled(make(xy), "both");
+      const right = scheduled(make([...xy].reverse()), "both");
+      expect(left.start).toBe(1);
+      expect(right.start).toBe(1);
+      expect(left.binding).toEqual({ kind, seat: "x", carrier: "x" });
+      expect(right.binding).toEqual(left.binding);
+    }
   });
 
   it("A5 reports H minus baseline start and beyond only on the transition", () => {
@@ -288,7 +296,7 @@ describe("defensive schedule audit", () => {
         label: "late",
         months: 3,
         beyond: true,
-        binding: { kind: "capacity", seat: "x", carrier: "x" },
+        binding: { kind: "hire", seat: "x", carrier: "x" },
       },
     ]);
     expect(slips(delayed, baseline)[0]).toMatchObject({ months: -3, beyond: false });
@@ -539,7 +547,8 @@ describe("the binding of work leveling pushes beyond the horizon", () => {
     ];
     const left = scheduled(make(xy), "both");
     const right = scheduled(make([...xy].reverse()), "both");
-    expect(left).toMatchObject({ beyond: true, binding: { kind: "capacity", seat: "x", carrier: "x" } });
+    // Neither seat is hired inside the horizon, so the wait is for a hire, not for room.
+    expect(left).toMatchObject({ beyond: true, binding: { kind: "hire", seat: "x", carrier: "x" } });
     expect(right.binding).toEqual(left.binding);
   });
 
@@ -616,7 +625,7 @@ describe("demand profiles", () => {
     expect(scheduled(plan, "a", AS_PLANNED).start).toBe(0); // as planned: reported, not moved
     const leveled = scheduled(plan, "a", LEVELED);
     expect(leveled.start).toBe(4);
-    expect(leveled.binding).toEqual({ kind: "capacity", seat: "cto", carrier: "cto" });
+    expect(leveled.binding).toEqual({ kind: "hire", seat: "cto", carrier: "cto" });
     // A contribution from the unhired seat does not block an item someone else owns.
     const helped = fixture({
       calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },

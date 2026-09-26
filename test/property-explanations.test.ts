@@ -16,7 +16,9 @@ import { TIMEOUT, expectCoverage } from "./property/run";
 // => horizon) and the capacity binding otherwise; P2.beyond-label holds the other (horizon =>
 // time cause) as its own clause, since that is the label W104 turns into "its run would extend
 // past the horizon". Concrete cases of both live in test/schedule-audit.test.ts (D1) and
-// test/underway-beyond.test.ts.
+// test/underway-beyond.test.ts. A leveled move or a capacity beyond is a hire binding when the
+// carrier short of room had nobody hired yet; P2.hire checks what that promises, and
+// test/hire-wait.test.ts has the concrete cases.
 
 describe("P2 explanations, replayed against an independent oracle", () => {
   it("P2.binding: every binding names what bound the start, and for an item beyond the horizon, why it never fits", () => {
@@ -48,6 +50,21 @@ describe("P2 explanations, replayed against an independent oracle", () => {
     expectCoverage("an item leveling kept beyond the horizon", broad.hits.beyondByCapacity, broad.runs, 0.08);
     const every = clauseHolds("P2.complete", EVERY_CARRIER_BINDS, checkSchedule, true);
     expectCoverage("an item leveling kept beyond the horizon", every.hits.beyondByCapacity, every.runs, 0.18);
+  }, TIMEOUT);
+
+  it("P2.hire: a hire binding keeps its promise, scheduled or beyond the horizon", () => {
+    // A leveled move or a capacity beyond is a hire, not a capacity, binding when, in the first
+    // short month of the last start refused, the carrier shortest of room had nobody hired and
+    // the item asked something of it (P2.binding checks the kind). Then nobody on the named
+    // seat's fallback chain is hired by that month; for a scheduled item the first of them is
+    // hired the month after it, at or after the start, and beyond the horizon none is hired in
+    // time for the last month the run could start. W104's hire text says exactly this.
+    const broad = clauseHolds("P2.hire", BROAD, checkSchedule);
+    expectCoverage("a planned item leveling held for a hire", broad.hits.hireWaits, broad.runs, 0.02);
+    expectCoverage("an item leveling kept beyond the horizon waiting for a hire", broad.hits.hireTooLate, broad.runs, 0.06);
+    const every = clauseHolds("P2.hire", EVERY_CARRIER_BINDS, checkSchedule, true);
+    expectCoverage("a planned item leveling held for a hire", every.hits.hireWaits, every.runs, 0.04);
+    expectCoverage("an item leveling kept beyond the horizon waiting for a hire", every.hits.hireTooLate, every.runs, 0.13);
   }, TIMEOUT);
 
   it("P2.beyond-label: an item that capacity, not time, kept beyond the horizon is never labelled with the horizon", () => {

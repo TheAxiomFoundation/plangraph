@@ -5,7 +5,7 @@
 
 import { atFundingYearEnd, byFundingYear, fundingYears, sumRange, type Ledger } from "./economics.js";
 import { lintPolicy, monthLabel, ownerOf, type Plan, type SeatId } from "./model.js";
-import { overloads, type Schedule, type Scheduled } from "./schedule.js";
+import { carrierFor, overloads, seatsHired, type Schedule, type Scheduled } from "./schedule.js";
 
 export type Severity = "error" | "warn" | "info";
 
@@ -185,6 +185,40 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
   const years = fundingYears(cal);
   const y1End = cal.fundingYearStartMonth + 12;
   const policy = lintPolicy(plan);
+  // For W104: a wait for a hire is told apart from a full seat. The first names the hire the
+  // item waits for (once hired, the seat still needs room for it), the second the seat that has
+  // no room.
+  const seatDefs = new Map(plan.seats.map((x) => [x.id, x]));
+  /** Who carries a seat's demand in a month when anyone hired does: the role, or the hired seat on its fallback chain. */
+  const staffedCarrier = (seat: SeatId, m: number): SeatId | null => {
+    const c = carrierFor(seatDefs, s.hires, seat, m);
+    return c !== "external" && seatsHired(s.hires[c], m) > 0 ? c : null;
+  };
+  /** The first month anyone on a seat's fallback chain is hired, and who: the role that then carries its demand. */
+  const firstStaffed = (seat: SeatId): { month: number; carrier: SeatId } | null => {
+    for (let m = 0; m < H; m++) {
+      const c = staffedCarrier(seat, m);
+      if (c !== null) return { month: m, carrier: c };
+    }
+    return null;
+  };
+  /** Why an item waiting for a hire never fits: nobody on the seat's chain is hired by the last month its run could start. */
+  const hireTooLate = (it: Scheduled, seat: SeatId): { why: string; hint: string } => {
+    const first = firstStaffed(seat);
+    if (first === null) {
+      return {
+        why: it.binding.kind === "hire" && it.binding.carrier === seat
+          ? `this scenario does not hire ${seatTitle(plan, seat)} inside the horizon`
+          : `this scenario hires nobody to carry ${seatTitle(plan, seat)}'s work inside the horizon`,
+        hint: `Hire ${seatTitle(plan, seat)} inside the horizon, or drop the item.`,
+      };
+    }
+    const who = first.carrier === seat ? `${seatTitle(plan, seat)} is not hired` : `nobody is hired to carry ${seatTitle(plan, seat)}'s work`;
+    return {
+      why: `${who} until ${label(first.month)}, after the last month its run could start`,
+      hint: `Hire ${seatTitle(plan, first.carrier)} earlier, with room for this item, or drop the item.`,
+    };
+  };
 
   // W101 overloaded seats.
   for (const o of overloads(s)) {
@@ -270,6 +304,11 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
       continue;
     }
     if (it.beyond) {
+      if (it.binding.kind === "hire") {
+        const { why, hint } = hireTooLate(it, it.binding.seat);
+        out.push({ code: "W104", severity: "warn", subject: it.item.id, message: `"${it.item.label}" does not fit inside the horizon: ${why}.`, hint });
+        continue;
+      }
       const why =
         it.binding.kind === "capacity"
           ? `leveling found no start with room for it; the last seat without room was ${seatTitle(plan, it.binding.carrier)}`
@@ -283,6 +322,16 @@ export function lintSchedule(plan: Plan, s: Schedule, l: Ledger): Finding[] {
     }
     const late = it.start - it.item.earliest;
     if (late >= policy.slipMonths && it.binding.kind !== "underway") {
+      if (it.binding.kind === "hire") {
+        // The first hire on the seat's fallback chain, which lands at or after the start: in the
+        // start month, or later when the run asks nothing of the seat in its first months.
+        const seat = it.binding.seat;
+        const first = firstStaffed(seat) ?? { month: it.start, carrier: it.binding.carrier };
+        const role = seatTitle(plan, first.carrier);
+        const why = `waits for the ${role} hire in ${label(first.month)}${first.carrier === seat ? "" : ` to carry ${seatTitle(plan, seat)}'s work`}`;
+        out.push({ code: "W104", severity: "warn", subject: it.item.id, message: `"${it.item.label}" starts ${late} months after its declared ${label(it.item.earliest)}: ${why}.`, hint: `Pull the ${role} hire forward, or declare the start later.` });
+        continue;
+      }
       const why =
         it.binding.kind === "predecessor"
           ? `waits for "${byId.get(it.binding.id)!.item.label}"`
