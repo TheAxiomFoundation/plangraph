@@ -500,8 +500,10 @@ export function tightens(plan: Plan, a: Scenario, b: Scenario): boolean {
  * The scenarios `b` tightens most closely: each one `b` tightens and schedules differently
  * from, with no other such scenario strictly between it and `b` (tightening it without being
  * tightened back). Of those, scenarios that schedule alike (the same items and bookings) count
- * once, the first listed standing for the rest, so the order of the list changes only which
- * name is shown. `scheduleOf` lets a caller that has the schedules already pass them in.
+ * once, the first listed standing for the rest. So the order of the list never changes which
+ * items get a W117, only which alike scenario each names and, since alike schedules can have
+ * bound for different reasons, the reason its hint gives. `scheduleOf` lets a caller that has
+ * the schedules already pass them in.
  */
 export function tightenedFrom(plan: Plan, scenarios: Scenario[], b: Scenario, scheduleOf: (sc: Scenario) => Schedule = (sc) => schedule(plan, sc)): Scenario[] {
   // Two scenarios schedule alike when their items and bookings match, whatever their inputs.
