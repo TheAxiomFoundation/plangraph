@@ -60,7 +60,10 @@ export interface SeatDef {
    */
   loadedAnnualByHire?: (number[] | null)[];
   costBasis: Basis;
-  /** Month index each seat in the role is hired. Seats in place before the plan use 0. */
+  /**
+   * Month index each seat in the role is hired. Seats in place before the plan use 0; W102
+   * exempts a hire declared at 0 from its idle check wherever a scenario moves it.
+   */
   hireMonths: number[];
   /** Capacity of one seat, in FTE. */
   capacityFte: number;
@@ -72,8 +75,11 @@ export interface SeatDef {
    */
   fallback: SeatId | "external" | null;
   /**
-   * A leadership seat: leveling never waits for room on it, because principals absorb
-   * rather than slip; the overload is reported instead. Off by default.
+   * A leadership seat: leveling does not wait for room on it, because principals absorb
+   * rather than slip; the overload is reported instead. The exception: with fallback null
+   * and no hire yet, leveling will not put load from an item it owns on the empty seat, so
+   * that item waits for the hire. With a fallback, its demand goes there before the hire and
+   * is leveled as usual. Off by default.
    */
   unlevelled?: boolean;
 }
@@ -107,7 +113,7 @@ export interface WorkItem {
   id: string;
   lane: string;
   label: string;
-  /** Priority group; the plan lists circles in booking order. Must be one of plan.circles. */
+  /** Priority group; the plan lists circles in booking order for planned work (underway items book first). Must be one of plan.circles. */
   circle: Circle;
   /** The accountable seat. Defaults to the first demand's seat; must be one of the demands. */
   owner?: SeatId;
@@ -119,9 +125,9 @@ export interface WorkItem {
   predecessors: Predecessor[];
   /** One demand per seat. */
   demands: Demand[];
-  /** True when the item has already begun: its start is a fact, not a decision. */
+  /** True when the item has already begun: its start is a fact, not a decision. It books before any planned item, so wherever leveling waits for room, its load is already counted. */
   underway: boolean;
-  /** Booking order inside a circle when leveling: lower first, default 0. Ties fall to the earliest start, then the id. */
+  /** Booking order of planned work inside a circle when leveling: lower first, default 0. Ties fall to the earliest start, then the id. Underway items book first, whatever their priority. */
   priority?: number;
   /** Non-labor burn per month while the item runs, if any. */
   burnPerMonth?: { usd: number; basis: Basis; note: string };
@@ -176,13 +182,13 @@ export interface LintPolicy {
   overloadMonths: number;
   /** ...or by at least this many FTE in any month. */
   overloadPeakFte: number;
-  /** W102: months a new hire may sit below the configured load share. */
+  /** W102: a hire declared after month 0 whose role stays below the configured load share for this many months in a row, from the month it lands in the scenario, is flagged idle. */
   idleMonths: number;
   /** W102: share of actual capacity below which a new hire is idle. */
   idleLoadShare: number;
-  /** W103: months an item may run before its owner exists, with a person carrying it. */
+  /** W103: an item starting this many months or more before a seat it demands is first hired is flagged, unless an outside carrier takes that demand at the start. */
   lateOwnerMonths: number;
-  /** W104: months an item may start after its declared month. */
+  /** W104: months late against its declared month at which an item is flagged. */
   slipMonths: number;
   /** W109: items one owner may run at once. */
   wideOwnerItems: number;
@@ -216,14 +222,17 @@ export interface Scenario {
   gist: string;
   /**
    * Whole months added to every hire in the role, or one delay per hire (index-aligned with
-   * hireMonths, missing entries 0); negative pulls forward. Keys are seat ids.
+   * hireMonths, no longer than it, missing entries 0); negative pulls forward, to month 0 at
+   * the earliest. Keys are seat ids, never one in dropSeats. A delay must land on a hire the
+   * scenario keeps: a hire in dropHires takes no delay of its own (its entry, if any, is 0),
+   * and a role whose every hire is dropped takes no whole-role delay but 0.
    */
   hireDelay?: Record<SeatId, number | number[]>;
-  /** Roles that do not exist in this scenario: never hired, never costed; their demand lands on their fallback. */
+  /** Roles that do not exist in this scenario: never hired, never costed; their demand goes to their fallback, or, with fallback null, stays on the empty role. */
   dropSeats?: SeatId[];
-  /** Individual hires that do not exist in this scenario: indices into the role's hireMonths. */
+  /** Individual hires that do not exist in this scenario: indices into the role's hireMonths. Keys are seat ids, never one in dropSeats. */
   dropHires?: Record<SeatId, number[]>;
-  /** Items that do not exist in this scenario (a pilot whose funding is not counted, say): no run, no bookings, no findings. */
+  /** Items that do not exist in this scenario (a pilot whose funding is not counted, say): no run, no bookings, no scenario findings of their own; planned dependents go beyond the horizon. */
   dropItems?: string[];
   /** Multiply every stream's volumes. Positive. */
   volumeScale?: number;
@@ -239,14 +248,15 @@ export interface Scenario {
 
 export interface Plan {
   /**
-   * What leveling binds on. "all" (default): every seat an item demands must have room, so a
-   * 0.1 contribution from an unhired seat holds the item. "owner": only the owner's seat binds;
-   * contributor overloads are reported (W101), never scheduled around.
+   * What leveling binds on. "all" (default): every carrier an item's demands land on must have
+   * room (unlevelled seats aside), so a 0.1 contribution left on an unhired seat holds the item.
+   * "owner": only load on the owner's seat binds; an overload elsewhere is reported (in the
+   * report's overloads, and as W101 past the policy), never scheduled around.
    */
   levelOn?: "all" | "owner";
   name: string;
   calendar: Calendar;
-  /** Circles in booking priority: the first books capacity first when leveling. Every item's circle must be listed. */
+  /** Circles in booking priority: planned work in the first books capacity first when leveling, after all underway work. Every item's circle must be listed. */
   circles: Circle[];
   /** What the plan is checked against, when a source model exists. */
   reference?: Reference;

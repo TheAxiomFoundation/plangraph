@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   AS_PLANNED,
+  LEVELED,
   ledger,
   lintSchedule,
   report,
   schedule,
   type Finding,
   type Plan,
+  type Scenario,
   type SeatDef,
   type WorkItem,
 } from "../src/index";
@@ -293,6 +295,43 @@ describe("defensive lint audit", () => {
     expect(finding({ ...eightPercent, lint: { idleMonths: 6 } }, "W102")).toBeUndefined();
   });
 
+  it("W102 exempts a hire by its declared month, not the month a scenario moves it to", () => {
+    // One engineer, idle until work arrives in month 6.
+    const plan = (x: Partial<SeatDef>): Plan =>
+      fixture({ seats: [role("x", x)], items: [work("later", { earliest: 6, duration: 3 })] });
+    const w102 = (p: Plan, over: Partial<Scenario>): Finding[] => {
+      const s = schedule(p, { ...AS_PLANNED, id: "moved", ...over });
+      return lintSchedule(p, s, ledger(p, s)).filter((f) => f.code === "W102");
+    };
+
+    // A hire declared in month 2 is checked where it lands, including month 0 when pulled
+    // forward, clamped or not.
+    expect(w102(plan({ hireMonths: [2] }), {}).map((f) => f.message)).toEqual(["x hired 2027-03 peaks at 0% load for its first 4 months."]);
+    expect(w102(plan({ hireMonths: [2] }), { hireDelay: { x: -2 } }).map((f) => f.message)).toEqual(["x hired 2027-01 peaks at 0% load for its first 6 months."]);
+    expect(w102(plan({ hireMonths: [2] }), { hireDelay: { x: -5 } }).map((f) => f.message)).toEqual(["x hired 2027-01 peaks at 0% load for its first 6 months."]);
+
+    // A hire declared in month 0 is in place before the plan, even when a delay moves it,
+    // and exempts only itself: a later hire in the same role is still checked.
+    expect(w102(plan({ hireMonths: [0] }), {})).toEqual([]);
+    expect(w102(plan({ hireMonths: [0] }), { hireDelay: { x: 3 } })).toEqual([]);
+    expect(w102(plan({ hireMonths: [0, 2] }), {}).map((f) => f.message)).toEqual(["x hired 2027-03 peaks at 0% load for its first 4 months."]);
+
+    // After a dropped hire, the declared month comes through hireIndex, not the position.
+    expect(w102(plan({ hireMonths: [0, 5] }), { dropHires: { x: [0] }, hireDelay: { x: [0, -5] } }).map((f) => f.message)).toEqual([
+      "x hired 2027-01 peaks at 0% load for its first 6 months.",
+    ]);
+    expect(w102(plan({ hireMonths: [5, 0] }), { dropHires: { x: [0] } })).toEqual([]);
+
+    // A schedule without hireIndex cannot match hires to declarations, so it falls back to the
+    // month each hire lands rather than pairing a kept hire with a dropped one's month.
+    const dropped = plan({ hireMonths: [0, 2] });
+    const s = schedule(dropped, { ...AS_PLANNED, id: "moved", dropHires: { x: [0] } });
+    const unindexed = { ...s, hireIndex: undefined } as unknown as typeof s;
+    expect(lintSchedule(dropped, unindexed, ledger(dropped, s)).filter((f) => f.code === "W102").map((f) => f.message)).toEqual([
+      "x hired 2027-03 peaks at 0% load for its first 4 months.",
+    ]);
+  });
+
   it("D8 triggers W101 on a material two-month peak and honors both overload thresholds", () => {
     const plan = fixture({
       calendar: { startYear: 2027, startMonth: 1, horizonMonths: 4, fundingYearStartMonth: 0 },
@@ -471,5 +510,222 @@ describe("defensive lint audit", () => {
     });
     expect(finding(reference, "W111")).toBeDefined();
     expect(finding({ ...reference, lint: { referenceCostTolerance: 1 } }, "W111")).toBeUndefined();
+  });
+});
+
+describe("W101 under leveling names the load leveling does not wait for", () => {
+  const leveled = (plan: Plan): Finding[] => {
+    const result = schedule(plan, LEVELED);
+    return lintSchedule(plan, result, ledger(plan, result));
+  };
+  const advice = " Add a seat, narrow the mandate, or lower the effort assumption.";
+
+  it("names underway load under levelOn all, since leveling waits for room for the rest, fallback load included", () => {
+    // u1 and u2 are underway and book first; together they put x over in months 0-3. carried
+    // asks for w, never hired, whose work falls back to x: it waits for room on x.
+    const plan = fixture({
+      seats: [role("x"), role("w", { hireMonths: [12], fallback: "x" })],
+      items: [
+        work("u1", { priority: -1, underway: true, duration: 4 }),
+        work("u2", { priority: -1, underway: true, duration: 4 }),
+        work("carried", { owner: "w", duration: 2, demands: [{ seat: "w", fte: 1, basis: "A" }] }),
+        work("planned", { duration: 4 }),
+      ],
+    });
+    const result = schedule(plan, LEVELED);
+    expect(result.items.find((it) => it.item.id === "carried")).toMatchObject({ start: 4, binding: { kind: "capacity", seat: "w", carrier: "x" } });
+    expect(leveled(plan).find((f) => f.code === "W101" && f.subject === "x")!.hint).toBe(
+      "Leveling waits for room on this seat for all but underway work, so underway load is what puts it over." + advice,
+    );
+    expect(finding(plan, "W101", "x")!.hint).toBe("Run a leveled scenario to see what slides, or narrow this seat's portfolio.");
+    const planned = { ...plan, items: plan.items.filter((it) => !it.underway) };
+    expect(leveled(planned).find((f) => f.code === "W101")).toBeUndefined();
+  });
+
+  it("names levelOn owner when a seat is over capacity on work it does not own", () => {
+    // y books its own item first; x's item then asks y for 0.6 more.
+    const plan = fixture({
+      seats: [role("x"), role("y")],
+      items: [
+        work("own", { owner: "y", priority: -1, duration: 4, demands: [{ seat: "y", fte: 1, basis: "A" }] }),
+        work("help", { duration: 4, demands: [{ seat: "x", fte: 1, basis: "A" }, { seat: "y", fte: 0.6, basis: "A" }] }),
+      ],
+    });
+    expect(leveled(plan).find((f) => f.code === "W101")).toBeUndefined(); // every seat binds: help waits
+    const warning = leveled({ ...plan, levelOn: "owner" }).find((f) => f.code === "W101" && f.subject === "y");
+    expect(warning!.hint).toBe(
+      "Under levelOn owner, leveling waits for room on this seat only for items it owns and never for underway work, so underway load or work on items it does not own is what puts it over." +
+        advice,
+    );
+  });
+
+  it("says a leadership seat absorbs once hired, and holds only its own items for the hire, under either levelOn", () => {
+    const hint = "Leveling does not wait for room on a leadership seat, only for the hire of one with no fallback on an item it owns, so its overload is reported here instead." + advice;
+    const items = ["a", "b"].map((id) => work(id, { owner: "ceo", duration: 4, demands: [{ seat: "ceo", fte: 1, basis: "A" }] }));
+    for (const levelOn of ["all", "owner"] as const) {
+      const inPlace = fixture({ levelOn, seats: [role("ceo", { unlevelled: true })], items });
+      expect(leveled(inPlace).find((f) => f.code === "W101" && f.subject === "ceo")!.hint).toBe(hint);
+
+      // Hired in month 3: both items wait for the hire, then overlap on the seat.
+      const hired = fixture({ levelOn, seats: [role("ceo", { unlevelled: true, hireMonths: [3] })], items });
+      const found = leveled(hired);
+      expect(found.find((f) => f.code === "W101" && f.subject === "ceo")!.hint).toBe(hint);
+      expect(found.find((f) => f.code === "W104" && f.subject === "a")!.message).toBe('"a" starts 3 months after its declared 2027-01: waits for the ceo hire in 2027-04.');
+    }
+  });
+});
+
+describe("thresholds on sums do not flip with the order they were added", () => {
+  // Booked 0.1, 0.2, 0.3 the load is 0.6000000000000001; booked 0.3, 0.2, 0.1 it is 0.6.
+  // Priorities set the booking order, so every permutation is tried.
+  const ORDERS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+  const tenths = (order: number[], seat: string, over: Partial<WorkItem> = {}, prefix = "d"): WorkItem[] =>
+    [0.1, 0.2, 0.3].map((fte, k) => work(`${prefix}${k}`, { owner: seat, priority: order[k], demands: [{ seat, fte, basis: "A" }], ...over }));
+  const distinct = (values: number[]) => [...new Set(values)].sort((a, b) => a - b);
+
+  it("W116: a principal at exactly the policy's load does not warn, in any order", () => {
+    const make = (order: number[], principalLoad: number): Plan =>
+      fixture({
+        seats: [role("principal"), role("worker", { hireMonths: [6], fallback: "principal" })],
+        items: tenths(order, "worker"),
+        lint: { principalLoad },
+      });
+    expect(distinct(ORDERS.map((o) => schedule(make(o, 0.6), AS_PLANNED).loads[0].demand[0]))).toEqual([0.6, 0.6000000000000001]);
+    for (const o of ORDERS) expect(finding(make(o, 0.6), "W116")).toBeUndefined();
+    for (const o of ORDERS) expect(finding(make(o, 0.59), "W116")).toBeDefined();
+  });
+
+  it("W116: of two months with the same load, the first is named, in any order", () => {
+    const make = (first: number[], second: number[]): Plan =>
+      fixture({
+        seats: [role("principal"), role("worker", { hireMonths: [6], fallback: "principal" })],
+        items: [...tenths(first, "worker"), ...tenths(second, "worker", { earliest: 1 }, "e")],
+        lint: { principalLoad: 0.59 },
+      });
+    const messages = ORDERS.flatMap((first) => ORDERS.map((second) => finding(make(first, second), "W116")!.message));
+    expect(new Set(messages).size).toBe(1);
+    expect(messages[0]).toMatch(/0\.60 FTE of demand in 2027-01/);
+  });
+
+  it("W115: last-circle load at exactly the policy does not warn, in any order", () => {
+    const make = (order: number[], lastCircleFteMonths: number): Plan =>
+      fixture({ circles: ["core", "later"], items: tenths(order, "x", { circle: "later" }), lint: { lastCircleFteMonths } });
+    const sums = ORDERS.map((o) => schedule(make(o, 0.6), AS_PLANNED).bookings.reduce((n, b) => n + b.fte, 0));
+    expect(distinct(sums)).toEqual([0.6, 0.6000000000000001]);
+    for (const o of ORDERS) expect(finding(make(o, 0.6), "W115")).toBeUndefined();
+    for (const o of ORDERS) expect(finding(make(o, 0.59), "W115")).toBeDefined();
+  });
+
+  it("W101: a peak at exactly the policy's FTE warns, in any order", () => {
+    const make = (order: number[], overloadPeakFte: number): Plan =>
+      fixture({ seats: [role("x", { capacityFte: 0.2 })], items: tenths(order, "x"), lint: { overloadPeakFte, overloadMonths: 99 } });
+    const peaks = ORDERS.map((o) => {
+      const s = schedule(make(o, 0.4), AS_PLANNED);
+      return s.loads[0].demand[0] - s.loads[0].capacity[0];
+    });
+    expect(distinct(peaks)).toEqual([0.39999999999999997, 0.4000000000000001]);
+    for (const o of ORDERS) expect(finding(make(o, 0.4), "W101")).toBeDefined();
+    for (const o of ORDERS) expect(finding(make(o, 0.41), "W101")).toBeUndefined();
+  });
+
+  it("W102: a hire at exactly the policy's share is not idle, in any order", () => {
+    const make = (order: number[], idleLoadShare: number): Plan =>
+      fixture({
+        seats: [role("x", { hireMonths: [1], capacityFte: 6 })],
+        items: tenths(order, "x", { earliest: 1, standing: true }),
+        lint: { idleLoadShare },
+      });
+    const shares = ORDERS.map((o) => {
+      const s = schedule(make(o, 0.1), AS_PLANNED);
+      return s.loads[0].demand[1] / s.loads[0].capacity[1];
+    });
+    expect(distinct(shares)).toEqual([0.09999999999999999, 0.10000000000000002]);
+    for (const o of ORDERS) expect(finding(make(o, 0.1), "W102")).toBeUndefined();
+    for (const o of ORDERS) expect(finding(make(o, 0.11), "W102")).toBeDefined();
+  });
+
+  const permutations = <T,>(xs: T[]): T[][] =>
+    xs.length <= 1 ? [xs] : xs.flatMap((x, k) => permutations([...xs.slice(0, k), ...xs.slice(k + 1)]).map((rest) => [x, ...rest]));
+  const cost = (plan: Plan): number => {
+    const result = schedule(plan, AS_PLANNED);
+    return ledger(plan, result).cost.reduce((a, b) => a + b, 0);
+  };
+  const salaried = (annuals: number[]): SeatDef[] => annuals.map((loadedAnnual, k) => role(`s${k}`, { loadedAnnual }));
+
+  it("W106: revenue at exactly the policy's assumed share does not warn, in any order of streams", () => {
+    // 24 of 30 units a year are assumed: exactly 80% of revenue. Summed by month, the share
+    // lands on 80% in some orders of streams and a hair above it in others.
+    const stream = (id: string, units: number, basis: "A" | "M"): Plan["streams"][number] => ({
+      id,
+      label: id,
+      unlockedBy: "unlock",
+      unit: "unit",
+      price: { usd: 100, basis: "A", note: "audit fixture" },
+      volumeByYear: { units: [units], basis, note: "audit fixture" },
+      rampMonths: 0,
+    });
+    const make = (units: [number, number, number]): Plan[] =>
+      permutations([stream("a1", units[0], "A"), stream("a2", units[1], "A"), stream("m", units[2], "M")]).map((streams) =>
+        fixture({ items: [work("unlock")], streams }),
+      );
+    const shares = make([10, 14, 6]).map((plan) => {
+      const l = ledger(plan, schedule(plan, AS_PLANNED));
+      const total = l.revenue.reduce((a, b) => a + b, 0);
+      return ["a1", "a2"].reduce((n, id) => n + l.revenueByStream[id].reduce((a, b) => a + b, 0), 0) / total;
+    });
+    expect(distinct(shares).length).toBeGreaterThan(1);
+    for (const plan of make([10, 14, 6])) expect(finding(plan, "W106")).toBeUndefined();
+    for (const plan of make([10, 14.01, 5.99])) expect(finding(plan, "W106")).toBeDefined();
+  });
+
+  it("W111: cost at exactly the reference tolerance is not flagged, in any order of seats", () => {
+    // Against a 120,000 reference, 138,000 is exactly 15% over and 102,000 exactly 15% under.
+    const make = (annuals: number[]): Plan[] =>
+      permutations(salaried(annuals)).map((seats) =>
+        fixture({ seats, reference: { headcountByYear: [annuals.length], gross: 120_000, nonLaborShare: [0, 1], note: "audit reference" } }),
+      );
+    for (const [exact, beyond] of [
+      [[80_000, 30_000, 28_000], [80_000, 30_000, 28_100]],
+      [[70_000, 30_000, 2_000], [70_000, 30_000, 1_900]],
+    ]) {
+      expect(distinct(make(exact).map(cost)).length).toBeGreaterThan(1);
+      for (const plan of make(exact)) expect(finding(plan, "W111")).toBeUndefined();
+      for (const plan of make(beyond)) expect(finding(plan, "W111")).toBeDefined();
+    }
+  });
+
+  it("W112: a non-labor share at exactly the reference bound is not flagged, in any order of seats and lines", () => {
+    // 55,000 of non-labor against 220,000 of labor is exactly 20% of cost, both ends of the range.
+    const line = (id: string, usd: number): Plan["nonLabor"][number] => ({ id, label: id, byYear: [usd], basis: "A", note: "audit fixture" });
+    const make = (annuals: number[], lines: number[]): Plan[] =>
+      permutations(salaried(annuals)).flatMap((seats) =>
+        permutations(lines.map((usd, k) => line(`n${k}`, usd))).map((nonLabor) =>
+          fixture({ seats, nonLabor, reference: { headcountByYear: [annuals.length], gross: 1, nonLaborShare: [0.2, 0.2], note: "audit reference" } }),
+        ),
+      );
+    expect(distinct(make([100_000, 50_000, 70_000], [25_000, 15_000, 15_000]).map(cost)).length).toBeGreaterThan(1);
+    for (const plan of make([100_000, 50_000, 70_000], [25_000, 15_000, 15_000])) expect(finding(plan, "W112")).toBeUndefined();
+    for (const plan of make([100_000, 50_000, 70_000], [25_000, 15_000, 15_100])) expect(finding(plan, "W112")).toBeDefined();
+    for (const plan of make([100_000, 50_000, 70_000], [25_000, 15_000, 14_900])) expect(finding(plan, "W112")).toBeDefined();
+    // One seat and one line: monthly twelfths alone leave cost a hair under 100,000.
+    expect(finding(make([80_000], [20_000])[0], "W112")).toBeUndefined();
+  });
+
+  it("W105: cash that ends exactly at zero is not negative, in any order of seats", () => {
+    // Twelve monthly twelfths of each salary, added seat by seat, can leave cash a hair
+    // below zero in some orders of seats.
+    const make = (annuals: number[], funded: number): Plan[] =>
+      permutations(salaried(annuals)).map((seats) =>
+        fixture({ seats, funding: [{ id: "grant", label: "grant", byMonth: [funded], basis: "A", note: "audit fixture", counted: true }] }),
+      );
+    const ends = (plans: Plan[]) => plans.map((plan) => ledger(plan, schedule(plan, AS_PLANNED)).cash[11]);
+    for (const [annuals, funded] of [
+      [[80_000, 30_000, 28_000], 138_000],
+      [[100_000, 50_000, 70_000], 220_000],
+    ] as const) {
+      expect(ends(make([...annuals], funded)).some((cash) => cash < 0)).toBe(true);
+      for (const plan of make([...annuals], funded)) expect(finding(plan, "W105")).toBeUndefined();
+      for (const plan of make([...annuals], funded - 1)) expect(finding(plan, "W105")!.message).toBe("Cash turns negative in 2027-12; trough -0.00M.");
+    }
   });
 });

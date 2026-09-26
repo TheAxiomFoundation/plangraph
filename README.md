@@ -48,16 +48,18 @@ directly; `plangraph/node` adds `loadPlanFile`, which reads from `node:fs`.
 
 | Node | What it carries |
 |---|---|
-| Seat | `loadedAnnual` cost, optionally `loadedAnnualByYear` (one value per funding year, the last holding), which replaces the flat escalation for sources that escalate salary and then load it; `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. `unlevelled: true` marks a leadership seat: leveling never waits for room on it, and its overload is reported instead. |
-| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat (or a `profile`: FTE by quarter of the run, the last value holding), an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, and a `circle`, its priority group. |
-| Revenue stream | `unlockedBy` an item, `price`, recurring annual `volumeByYear` after unlock, `rampMonths`. |
+| Seat | `loadedAnnual` cost. Optionally `loadedAnnualByYear` (one value per funding year, the last holding), which replaces the flat escalation for sources that escalate salary and then load it. Optionally `loadedAnnualByHire`, for a pooled role whose seats are paid differently: one entry per hire in `hireMonths` order, each a schedule like `loadedAnnualByYear`, or `null` for the role's rate. `hireMonths` (one per seat in the role), `capacityFte`, and a `fallback`: the seat id that carries the role's work while the role has no hire, `"external"` for outside help, or `null` for nobody, in which case the load stays on the empty role. `unlevelled: true` marks a leadership seat: leveling does not wait for room on it, and its overload is reported instead. The exception is an item the seat owns before its first hire, when the seat has `fallback: null`: leveling will not put that item's load on the empty seat, so the item waits until its load there falls after the hire, or goes beyond the horizon if the scenario never hires the seat. With a fallback, the seat's demand goes to the fallback before the hire and is leveled there as usual. |
+| Work item | `earliest` month, a finite `duration`, or `standing` (runs to the horizon, and the duration may be omitted), `predecessors` with optional lag, `demands` in FTE per month per seat (a demand may add a `profile`: FTE by quarter of the run, the last value holding, which replaces the flat FTE month by month), an optional explicit `owner`, `underway` when the start is a fact, optional `burnPerMonth`, a `circle`, its priority group, and an optional `priority`, the booking order of planned work inside the circle when leveling (underway items book first): lower first, default 0. |
+| Revenue stream | `unlockedBy` an item: the stream turns on when that item finishes, or, for a standing item, when it starts; `price`; recurring annual `volumeByYear` counted from the unlock, the last year holding; `rampMonths`. |
 | Funding line | dollars `byMonth`, `counted` by default or overridden by a scenario. |
 | Non-labor line | dollars `byYear` on the funding calendar. |
-| Scenario | `hireDelay` by seat, `dropSeats` (roles that do not exist in the scenario: never hired or costed, their demand on their fallback), `volumeScale`, `countFunding`, `durationScale`, `effortScale`, and `level`: whether movable work respects capacity. |
-| Plan | the calendar, circles in priority order, optional `openingCash`, optional reference totals, optional `lint` thresholds. |
+| Scenario | `hireDelay` by seat in whole months (one delay for every hire in the role, or a list with one per hire in `hireMonths` order, missing entries 0; a negative delay pulls a hire forward, to month 0 at the earliest), `dropSeats` (roles that do not exist in the scenario: never hired or costed; their demand goes to their fallback, or, with `fallback: null`, stays on the empty role), `dropHires` (individual hires that do not exist, by position in the role's `hireMonths`, counting from 0; per-hire costs stay with the hires that remain), `dropItems` (items that do not exist in the scenario: they stay in the schedule with `dropped` and `beyond` set and binding `dropped`, but have no run, no bookings and no scenario findings of their own; dependents that are not underway go beyond the horizon, and the streams keyed to them never turn on), `volumeScale`, `countFunding`, `durationScale`, `effortScale`, and `level`: whether movable work respects capacity. |
+| Plan | a `name`, the calendar, circles in priority order, `escalation` (an annual rate that compounds `loadedAnnual` from funding year 2, with a basis), optional `scenarios` (the first is the baseline that slips are measured against; a plan with none runs `as-planned` and `leveled`), optional `levelOn` (what leveling waits for: `"all"`, the default, or `"owner"`; see Scheduling), optional `openingCash`, optional reference totals, optional `lint` thresholds. |
 
 Fallback is all-or-nothing per role: while a role has no hire, all of its demand goes to the
-fallback; once the first seat is hired, all of it stays on the role. External work is
+fallback; once the first seat is hired, all of it stays on the role. A fallback with no hire
+in that month passes the work along its own fallback, until a hired seat, `"external"`, or a
+seat with `fallback: null`, where the load stays on that empty role. External work is
 uncapped and uncosted, and it is counted: month by month in `Schedule.external`, and as
 `externalFteMonths` in every scenario report. Two findings lean on conventions rather than
 fields: W116 treats a seat with `fallback: null` as a principal, and W115 treats the last
@@ -69,20 +71,58 @@ dates and scenario scales do not. Months are integers; there is no partial-month
 
 ## Scheduling
 
-The scheduler takes items in priority order (circle, then declared start, then id),
-predecessors first, which can pull a lower-priority predecessor ahead of unrelated work. Ids
-break ties for scarce capacity. It is a serial heuristic, not an optimizer.
+The scheduler books underway items first: their starts are facts, so wherever leveling
+waits for room, their load is already counted. It then books planned items in priority order
+(circle, then `priority`, then declared start, then id), each after its predecessors, which
+go in id order. That can pull a predecessor ahead of work that outranks it; an underway item
+pulls nothing ahead, since it waits for nothing. The order moves starts only when leveling.
+It is a serial heuristic, not an optimizer.
 
-Each planned item starts at the latest of its declared month, its predecessors' ends (a
-standing predecessor releases its successors one month after it starts), and, when leveling,
-the first month from which every carrier it needs has room for the whole run. Work marked
-`underway` keeps its declared start: it waits for nothing, is not leveled, and a beyond
-predecessor does not take it beyond. Demands are
-resolved to carriers month by month and added up per carrier before they are compared with
-capacity, so two demands that land on the same person count together. A finite item that
-cannot finish inside the horizon, underway or not, goes beyond it: it books nothing,
-unlocks nothing, and takes its dependents with it. Standing work runs from its scheduled
-start to the horizon.
+So leveled schedules are not monotone. Relaxing an input (an earlier hire, more capacity, a
+shorter run, less effort, one dependency fewer) can make some item start later, and
+tightening one can make some item start earlier: work that moves frees or takes room that the
+next item in the order uses. These are the timing anomalies of list scheduling (Graham,
+1969). A difference between two leveled scenarios is therefore the change itself plus the
+substitutions it sets off; W117 marks an item that starts earlier in a scenario than in the
+nearest scenarios the plan carries that it only tightens. As planned, starts depend only on
+declared months, predecessors and durations, and are monotone. With a fallback, an earlier
+first hire is not even a relaxation: fallback is all-or-nothing, so moving a role's first
+hire forward can trade the fallback's room, or uncapped external help, for the role's own
+capacity. A later hire of a role already staffed only adds room.
+
+Each planned item starts at the later of its declared month and its predecessors' ends plus
+any lag (a standing predecessor releases its successors one month after it starts). When
+leveling, it then waits for the first month from which every carrier it needs has room for
+the whole run; demand carried externally in a month is never waited for, and unlevelled
+seats hold work only as the Seat row says. With `levelOn: owner`, it waits only for room on
+the owner's seat (the explicit `owner`, else the first demand's seat), counting any load
+that lands there. Load on any other seat, including a fallback that carries the owner's own
+demand, is not waited for; an overload there shows in the report's `overloads`, and as W101
+past the policy. Work marked `underway` keeps its declared start: it waits for nothing, is
+not leveled, and a beyond predecessor does not take it beyond. Demands are resolved to
+carriers month by month and added up per carrier before they are compared with capacity, so
+two demands that land on the same person count together. A finite item that cannot finish
+inside the horizon, underway or not, goes beyond it: it books nothing, unlocks nothing, and
+takes its planned dependents with it. Standing work runs from its scheduled start to the
+horizon.
+
+When leveling moves a start, its binding says what the item waited for, judged in the first
+month the last refused start was short of room, on the seat shortest of room then: `hire`
+when nobody was hired yet to carry a demand the item made of it there, on the seat itself or
+anywhere along the seat's fallback chain, and otherwise `capacity` (someone was hired and there
+was no room, or the item asked nothing of that seat that month). W104 prints a `hire` binding as a wait for that hire, with the month it lands, since
+the hire date and not the seat's workload is what moves the item. A pooled role that is full
+until its next hire is still `capacity`: someone is there, and there is no room. So is
+standing work that a later start fits once it drops the horizon's last month, the only month
+that start was short in.
+
+An item beyond the horizon says why in its binding, and W104 repeats it: a predecessor that
+never finishes; the horizon, when the run is longer than the months left after its declared
+start and its predecessors; or, when leveling pushed it out, the seat that last had no room
+for it, or a `hire` when, by the same test, nobody was hired in time to carry its demand from
+the last month its run could start (W104 says when the hire lands, or that the scenario never
+makes it). An item the scenario drops (`dropItems`) has binding `dropped`, and W104 leaves it
+out.
 
 ## Funding clock and reports
 
@@ -93,8 +133,14 @@ year-end outside the horizon is `null`, never copied from the last month. `openi
 (default 0) seeds the cash line.
 
 `report()` returns the full schedule, the monthly ledger, plan findings once, scenario
-findings with their scenario, and the summaries. The CLI's `--json` is a smaller
-projection of the same.
+findings with their scenario, and the summaries. The CLI's `--json` is a smaller projection
+of the same. `check` exits 2 on a usage error (a command other than `check` or `watch`, no
+plan path right after the command, or `--scenario` without an id) or when `--scenario` names
+no scenario; 1 when the plan does not load or parse, has errors, or cannot be computed (a
+non-finite or out-of-range result); and 0 otherwise. Arguments after the plan path other
+than `--json` and `--scenario id` are ignored. `--scenario id` reports one scenario, with
+its slips still measured against the baseline, the first scenario (`as-planned` for a plan
+with none); `report(plan, id)` does the same.
 
 ## Findings
 
@@ -108,20 +154,28 @@ projection of the same.
 | E006 | A seat with no hires, non-positive capacity, an unknown or looping fallback, or the reserved id `external`. |
 | E007 | An item in a circle the plan does not list. |
 | W101 | A seat over capacity for the policy's months, or by the policy's FTE in any month. |
-| W102 | A hire whose role stays under the policy's share of its capacity for the policy's months; the measured share is stated. |
-| W103 | An item starting well before its seat arrives: which hired seat carries it meanwhile, or that nobody does. |
+| W102 | A hire declared after month 0 whose role stays under the policy's share of its capacity for the policy's months in a row from the month the hire lands in the scenario; the peak share over that stretch is stated. A hire declared at month 0 is in place before the plan and exempt wherever a scenario's delay moves it; a later hire that a negative delay pulls onto month 0 is still checked. |
+| W103 | An item that starts the policy's months or more before a seat it demands is first hired, or that demands a seat the scenario never hires: which hired seat carries that demand at the start, or that nobody does. Demand carried externally at the start is not flagged. |
 | W104 | An item starting late against its declared month, or never fitting, with the binding cause. |
 | W105 | Cash going negative: first month and trough. |
 | W106 | More than the policy's share of complete-year revenue resting on assumed volumes. |
-| W107 | A first-circle item ending after funding year 1. |
+| W107 | A finite first-circle item ending after funding year 1. |
 | W108 | A stream that never unlocks inside the horizon. |
 | W109 | An owner (explicit, else the first demand) running too many items at once. |
 | W110–W112 | Headcount, gross cost and non-labor share drifting from the reference model, over complete years. |
 | W115 | FTE-months booked to the last circle on seats that are hired in that month, beyond the policy, in plans with more than one circle; external carriage and load on empty roles are not counted. |
-| W116 | A `fallback: null` seat, in months it is hired, carrying more than the policy's multiple of one seat's capacity through funding year 1, with the fallback share stated. |
+| W116 | A `fallback: null` seat carrying more than the policy's multiple of one seat's capacity in any month, from the plan's start through funding year 1, in which it is hired and carries other seats' work; the fallback share is stated. |
+| W117 | An item that starts earlier, or fits inside the horizon only, in a scenario that only tightens another the plan carries: a substitution leveling made, with the seat the item waited for in the other scenario and, of the work booked before it, what puts less load on the seats it uses here, and in which months. A scenario tightens another when it levels whenever the other does, scales effort and duration at least as much, drops the same items, and hires no earlier, counting a later or dropped hire only on a role with `fallback: null` or whose first hire does not move (`tightens()`). Each scenario is compared with the nearest scenarios it tightens, one per distinct schedule; the order the plan lists them in changes only which of two alike scenarios a finding names, and so the reason its hint gives (`tightenedFrom()`). |
 
-Thresholds come from `lintPolicy(plan)`; a plan sets its own under `lint`. There are no
-W113 or W114.
+E codes are errors: while one stands, `report()` schedules nothing and `check` fails.
+`schedule()` called directly does not run these checks, though it throws on a dependency
+cycle or an unknown predecessor. W106, W107, W110–W112 and W115 are info; the other W codes
+are warnings. Thresholds come from `lintPolicy(plan)`; a plan sets its own under `lint`:
+`overloadMonths` (default 3) and `overloadPeakFte` (0.5) for W101, `idleMonths` (3) and
+`idleLoadShare` (0.1) for W102, `lateOwnerMonths` (6) for W103, `slipMonths` (3) for W104,
+`assumedRevenueShare` (0.8) for W106, `wideOwnerItems` (4) for W109,
+`referenceCostTolerance` (0.15) for W111, `lastCircleFteMonths` (12) for W115, and
+`principalLoad` (1.5) for W116. There are no W113 or W114.
 
 A sum of FTE or dollars can differ in its last bit with the order it was added up, so the
 thresholds on sums and on shares of them (W101's peak, W102's share, W106's share, W111's

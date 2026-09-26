@@ -99,6 +99,7 @@ function check(): 0 | 1 | 2 {
           start: it.beyond ? null : monthLabel(plan.calendar, it.start),
           end: it.beyond ? null : monthLabel(plan.calendar, it.end - 1),
           beyond: it.beyond,
+          dropped: it.dropped === true,
           binding: it.binding,
         })),
         findings: s.findings,
@@ -127,7 +128,7 @@ function check(): 0 | 1 | 2 {
     console.log(`  ${"External FTE-months".padEnd(24)}${fmtFixed(s.externalFteMonths, 2)}`);
     console.log(`  ${"Cash trough".padEnd(24)}${fmtFixed(s.cashTrough.usd / 1e6, 2)}M in ${s.cashTrough.month}`);
     console.log(`  ${"Unlocks".padEnd(24)}${Object.entries(s.unlocks).map(([k, v]) => `${k} ${v ?? "never"}`).join(" · ") || "no streams"}`);
-    const top = s.slips.slice(0, 8).map((x) => `${x.label} ${x.beyond ? "beyond horizon" : `+${x.months}`}`).join(" · ");
+    const top = s.slips.slice(0, 8).map((x) => `${x.label} ${x.beyond ? "beyond horizon" : `${x.months > 0 ? "+" : ""}${x.months}`}`).join(" · ");
     console.log(`  ${"Slips vs baseline".padEnd(24)}${s.slips.length ? top : "none"}${s.slips.length > 8 ? ` · +${s.slips.length - 8} more` : ""}`);
     console.log(`  ${"Over capacity".padEnd(24)}${s.overloads.length ? s.overloads.slice(0, 5).map((o) => `${o.seat} ${o.months} mo (peak +${fmtFixed(o.peak, 2)})`).join(" · ") : "none"}`);
     console.log(`  ${"Findings".padEnd(24)}${s.counts.error} errors · ${s.counts.warn} warnings · ${s.counts.info} info`);
