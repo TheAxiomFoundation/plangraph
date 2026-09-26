@@ -78,6 +78,18 @@ go in id order. That can pull a predecessor ahead of work that outranks it; an u
 pulls nothing ahead, since it waits for nothing. The order moves starts only when leveling.
 It is a serial heuristic, not an optimizer.
 
+So leveled schedules are not monotone. Relaxing an input (an earlier hire, more capacity, a
+shorter run, less effort, one dependency fewer) can make some item start later, and
+tightening one can make some item start earlier: work that moves frees or takes room that the
+next item in the order uses. These are the timing anomalies of list scheduling (Graham,
+1969). A difference between two leveled scenarios is therefore the change itself plus the
+substitutions it sets off; W117 marks an item that starts earlier in a scenario than in the
+nearest scenarios the plan carries that it only tightens. As planned, starts depend only on
+declared months, predecessors and durations, and are monotone. With a fallback, an earlier
+first hire is not even a relaxation: fallback is all-or-nothing, so moving a role's first
+hire forward can trade the fallback's room, or uncapped external help, for the role's own
+capacity. A later hire of a role already staffed only adds room.
+
 Each planned item starts at the later of its declared month and its predecessors' ends plus
 any lag (a standing predecessor releases its successors one month after it starts). When
 leveling, it then waits for the first month from which every carrier it needs has room for
@@ -153,6 +165,7 @@ with none); `report(plan, id)` does the same.
 | W110–W112 | Headcount, gross cost and non-labor share drifting from the reference model, over complete years. |
 | W115 | FTE-months booked to the last circle on seats that are hired in that month, beyond the policy, in plans with more than one circle; external carriage and load on empty roles are not counted. |
 | W116 | A `fallback: null` seat carrying more than the policy's multiple of one seat's capacity in any month, from the plan's start through funding year 1, in which it is hired and carries other seats' work; the fallback share is stated. |
+| W117 | An item that starts earlier, or fits inside the horizon only, in a scenario that only tightens another the plan carries: a substitution leveling made, with the seat the item waited for in the other scenario and, of the work booked before it, what puts less load on the seats it uses here, and in which months. A scenario tightens another when it levels whenever the other does, scales effort and duration at least as much, drops the same items, and hires no earlier, counting a later or dropped hire only on a role with `fallback: null` or whose first hire does not move (`tightens()`). Each scenario is compared with the nearest scenarios it tightens, one per distinct schedule; the order the plan lists them in changes only which of two alike scenarios a finding names, and so the reason its hint gives (`tightenedFrom()`). |
 
 E codes are errors: while one stands, `report()` schedules nothing and `check` fails.
 `schedule()` called directly does not run these checks, though it throws on a dependency
