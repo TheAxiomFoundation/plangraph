@@ -30,6 +30,9 @@ const writePlan = (value: unknown): string => {
   return path;
 };
 
+/** Every order of three things, as indices. */
+const ORDERS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
@@ -284,5 +287,66 @@ describe("defensive CLI audit", () => {
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toBe('plangraph: unknown scenario "does-not-exist"');
     expect(physicalLines((thrown as Error).message)).toHaveLength(1);
+  });
+
+  it("prints external FTE-months and overload peaks that round the same in every booking order", () => {
+    // Priorities set the booking order. 0.288 + 0.465 + 0.772 FTE of a vendor's work goes external:
+    // 1.525 or 1.5250000000000001 FTE-months by order. 0.023 + 0.472 + 0.63 on x is 1.125 or
+    // 1.1249999999999998, a peak of 0.125 or just under it. toFixed shows either figure both ways.
+    const item = (id: string, seat: string, fte: number, priority: number) => ({
+      id,
+      lane: "lane",
+      label: id,
+      circle: "core",
+      owner: seat,
+      earliest: 0,
+      duration: 1,
+      standing: false,
+      underway: false,
+      priority,
+      predecessors: [],
+      demands: [{ seat, fte, basis: "A" }],
+    });
+    const printed = ORDERS.map((order) => {
+      const raw = basePlan();
+      raw.seats.push({ id: "vendor", title: "Vendor", loadedAnnual: 0, costBasis: "A", hireMonths: [12], capacityFte: 1, fallback: "external" });
+      raw.items = [
+        ...[0.288, 0.465, 0.772].map((fte, k) => item(`v${k}`, "vendor", fte, order[k])),
+        ...[0.023, 0.472, 0.63].map((fte, k) => item(`x${k}`, "x", fte, order[k])),
+      ] as Plan["items"];
+      const result = run("check", writePlan(raw));
+      expect(result.status).toBe(0);
+      const s = report(parsePlan(raw)).scenarios[0];
+      return {
+        external: s.externalFteMonths.toFixed(2),
+        peak: s.overloads[0].peak.toFixed(2),
+        lines: physicalLines(result.stdout).filter((line) => /External FTE-months|Over capacity/.test(line)).map(normalizedLine),
+      };
+    });
+    expect(new Set(printed.map((p) => p.external))).toEqual(new Set(["1.52", "1.53"]));
+    expect(new Set(printed.map((p) => p.peak))).toEqual(new Set(["0.12", "0.13"]));
+    for (const p of printed) expect(p.lines).toEqual(["External FTE-months 1.53", "Over capacity x 1 mo (peak +0.13)"]);
+  });
+
+  it("prints money that rounds the same in every order of seats", () => {
+    // 691,000 + 307,000 + 237,000 of salary comes to exactly 1,235,000 in some orders of seats and
+    // a hair under it in others: toFixed shows 1.24 or 1.23.
+    const seat = (id: string, loadedAnnual: number) => ({ id, title: id, loadedAnnual, costBasis: "A", hireMonths: [0], capacityFte: 1, fallback: null });
+    const salaries: Array<[string, number]> = [["a", 691_000], ["b", 307_000], ["c", 237_000]];
+    const printed = ORDERS.map((order) => {
+      const raw = basePlan();
+      raw.seats = order.map((k) => seat(...salaries[k])) as Plan["seats"];
+      const result = run("check", writePlan(raw));
+      expect(result.status).toBe(0);
+      const s = report(parsePlan(raw)).scenarios[0];
+      return {
+        cost: (s.costByYear[0] / 1e6).toFixed(2),
+        trough: (s.cashTrough.usd / 1e6).toFixed(2),
+        lines: physicalLines(result.stdout).filter((line) => /Cost \(\$M\)|Cash trough/.test(line)).map(normalizedLine),
+      };
+    });
+    expect(new Set(printed.map((p) => p.cost))).toEqual(new Set(["1.23", "1.24"]));
+    expect(new Set(printed.map((p) => p.trough))).toEqual(new Set(["-1.23", "-1.24"]));
+    for (const p of printed) expect(p.lines).toEqual(["Cost ($M) 1.24 | 1y 1.24", "Cash trough -1.24M in 2027-12"]);
   });
 });
