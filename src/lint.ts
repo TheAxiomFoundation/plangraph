@@ -497,10 +497,11 @@ export function tightens(plan: Plan, a: Scenario, b: Scenario): boolean {
 }
 
 /**
- * The scenarios `b` tightens most closely: each one `b` tightens, schedules differently from,
- * and reaches through no other scenario in the list. Of scenarios that schedule alike (the
- * same items and bookings), the first listed stands for the rest. `scheduleOf` lets a caller
- * that has the schedules already pass them in.
+ * The scenarios `b` tightens most closely: each one `b` tightens and schedules differently
+ * from, with no other such scenario strictly between it and `b` (tightening it without being
+ * tightened back). Of those, scenarios that schedule alike (the same items and bookings) count
+ * once, the first listed standing for the rest, so the order of the list changes only which
+ * name is shown. `scheduleOf` lets a caller that has the schedules already pass them in.
  */
 export function tightenedFrom(plan: Plan, scenarios: Scenario[], b: Scenario, scheduleOf: (sc: Scenario) => Schedule = (sc) => schedule(plan, sc)): Scenario[] {
   // Two scenarios schedule alike when their items and bookings match, whatever their inputs.
@@ -508,15 +509,17 @@ export function tightenedFrom(plan: Plan, scenarios: Scenario[], b: Scenario, sc
     const s = scheduleOf(sc);
     return JSON.stringify([s.items.map((x) => [x.item.id, x.start, x.end, x.beyond, !!x.dropped]), s.bookings]);
   };
-  const seen = new Set([shape(b)]);
-  const looser = scenarios.filter((a) => {
-    if (!tightens(plan, a, b)) return false;
+  const mine = shape(b);
+  const looser = scenarios.filter((a) => a !== b && shape(a) !== mine && tightens(plan, a, b));
+  const strictly = (x: Scenario, y: Scenario) => tightens(plan, x, y) && !tightens(plan, y, x);
+  const nearest = looser.filter((a) => !looser.some((c) => c !== a && strictly(a, c)));
+  const seen = new Set<string>();
+  return nearest.filter((a) => {
     const k = shape(a);
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   });
-  return looser.filter((a) => !looser.some((c) => c !== a && tightens(plan, a, c)));
 }
 
 /**
@@ -530,15 +533,18 @@ export function lintSubstitutions(plan: Plan, s: Schedule, looser: Schedule): Fi
   const label = (m: number) => monthLabel(plan.calendar, m);
   const before = new Map(looser.items.map((x) => [x.item.id, x]));
   const rank = new Map(bookingOrder(plan).map((id, k) => [id, k]));
-  /** FTE on a carrier by item and month over [from, to), from items booked before `subject`. */
-  const loadOn = (sched: Schedule, carrier: string, from: number, to: number, subject: string) => {
-    const by = new Map<string, number>();
-    for (const b of sched.bookings) {
-      if (b.carrier !== carrier || b.month < from || b.month >= to || rank.get(b.item)! >= rank.get(subject)!) continue;
-      const key = `${b.item}\u0000${b.month}`;
-      by.set(key, (by.get(key) ?? 0) + b.fte);
+  /** "a", "a and b", "a, b and c". */
+  const and = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+  /** Months as labels, runs of consecutive months as "from to". */
+  const spans = (months: number[]) => {
+    const out: string[] = [];
+    for (let k = 0; k < months.length; k++) {
+      let j = k;
+      while (j + 1 < months.length && months[j + 1] === months[j] + 1) j++;
+      out.push(j === k ? label(months[k]) : `${label(months[k])} to ${label(months[j])}`);
+      k = j;
     }
-    return by;
+    return and(out);
   };
   for (const it of s.items) {
     const was = before.get(it.item.id)!;
@@ -547,29 +553,41 @@ export function lintSubstitutions(plan: Plan, s: Schedule, looser: Schedule): Fi
     const message = was.beyond
       ? `"${it.item.label}" fits inside the horizon here, from ${label(it.start)}, but not under ${name}, though this scenario only tightens that one.`
       : `"${it.item.label}" starts ${was.start - it.start} month${was.start - it.start === 1 ? "" : "s"} earlier here (${label(it.start)}) than under ${name} (${label(was.start)}), though this scenario only tightens that one.`;
-    // Where the looser schedule held it: the seat that had no room, and, of the work booked
-    // before it (all it had to fit beside when it was booked), what put less load there, month
-    // by month, over the months it moved into.
+    // Where the looser schedule held it: the seat that had no room. Then, over the months it
+    // moved into, the seats its own demand lands on here, and, of the work booked before it (all
+    // it had to fit beside when it was booked), what puts less load on them here than there, in
+    // which months.
     let where = "";
     if (was.binding.kind === "capacity" || was.binding.kind === "hire") {
-      const carrier = was.binding.carrier;
       const to = was.beyond ? it.end : Math.min(was.start, it.end);
-      const a = loadOn(looser, carrier, it.start, to, it.item.id);
-      const b = loadOn(s, carrier, it.start, to, it.item.id);
-      const less = new Map<string, number>();
-      for (const [key, fte] of a) {
-        const id = key.split("\u0000")[0];
-        less.set(id, (less.get(id) ?? 0) + Math.max(0, fte - (b.get(key) ?? 0)));
+      const cell = (carrier: string, month: number) => `${carrier}\u0000${month}`;
+      const mine = new Set(s.bookings.filter((b) => b.item === it.item.id && b.carrier !== "external" && b.month < to).map((b) => cell(b.carrier, b.month)));
+      const loadAt = (sched: Schedule) => {
+        const by = new Map<string, number>();
+        for (const b of sched.bookings) {
+          if (b.carrier === "external" || !mine.has(cell(b.carrier, b.month)) || rank.get(b.item)! >= rank.get(it.item.id)!) continue;
+          const key = `${b.item}\u0000${cell(b.carrier, b.month)}`;
+          by.set(key, (by.get(key) ?? 0) + b.fte);
+        }
+        return by;
+      };
+      const here = loadAt(s);
+      const less = new Map<string, { fte: number; seats: Set<string>; months: Set<number> }>();
+      for (const [key, fte] of loadAt(looser)) {
+        const drop = fte - (here.get(key) ?? 0);
+        if (drop <= 1e-9) continue;
+        const [id, carrier, month] = key.split("\u0000");
+        const x = less.get(id) ?? { fte: 0, seats: new Set<string>(), months: new Set<number>() };
+        x.fte += drop;
+        x.seats.add(carrier);
+        x.months.add(Number(month));
+        less.set(id, x);
       }
-      const freed = [...less]
-        .map(([id, x]) => ({ id, less: x }))
-        .filter((x) => x.less > 1e-9)
-        .sort((x, y) => y.less - x.less || (x.id < y.id ? -1 : 1))
-        .slice(0, 3)
-        .map((x) => `"${before.get(x.id)!.item.label}"`);
-      const who = freed.length < 2 ? freed.join("") : `${freed.slice(0, -1).join(", ")} and ${freed[freed.length - 1]}`;
-      const when = to - 1 === it.start ? `in ${label(it.start)}` : `from ${label(it.start)} to ${label(to - 1)}`;
-      where = `Under ${name} it waited for ${was.binding.kind === "hire" ? "a hire to carry" : "room on"} ${seatTitle(plan, carrier)}${freed.length ? `; here ${who} put less there ${when}` : ""}. `;
+      const freed = [...less].sort(([p, x], [q, y]) => y.fte - x.fte || (p < q ? -1 : 1)).slice(0, 3);
+      const seats = [...new Set(freed.flatMap(([, x]) => [...x.seats]))].sort().map((c) => seatTitle(plan, c));
+      const months = [...new Set(freed.flatMap(([, x]) => [...x.months]))].sort((a, b) => a - b);
+      const who = and(freed.map(([id]) => `"${before.get(id)!.item.label}"`));
+      where = `Under ${name} it waited for ${was.binding.kind === "hire" ? "a hire to carry" : "room on"} ${seatTitle(plan, was.binding.carrier)}${freed.length ? `; here ${who}, booked before it, put less on ${and(seats)} in ${spans(months)}` : ""}. `;
     } else if (was.binding.kind === "predecessor") {
       const p = before.get(was.binding.id)!;
       const then = was.beyond ? "does not fit inside the horizon there" : p.item.standing ? "starts earlier here" : "ends earlier here";

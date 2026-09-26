@@ -146,22 +146,41 @@ function reasonsHold(plan: Plan, loose: Schedule, tight: Schedule): boolean {
       if (pred[2] === "starts earlier here" && !(pa.item.standing && pb.start < pa.start)) return false;
       if (pred[2] === "ends earlier here" && !(!pa.item.standing && !pa.beyond && !pb.beyond && pb.end < pa.end)) return false;
     }
-    const room = /it waited for (?:room on|a hire to carry) ([^;.]+)(?:; here (.+) put less there (?:in (\d{4}-\d{2})|from (\d{4}-\d{2}) to (\d{4}-\d{2})))?\./.exec(f.hint);
+    const room = /it waited for (?:room on|a hire to carry) ([^;.]+)(?:; here (.+), booked before it, put less on (.+) in (.+))?\./.exec(f.hint);
     if (room) {
       const carrier = room[1];
       if ((a.binding.kind !== "capacity" && a.binding.kind !== "hire") || a.binding.carrier !== carrier) return false;
-      const from = room[3] ? monthOf(plan, room[3]) : room[4] ? monthOf(plan, room[4]) : b.start;
-      const to = (room[3] ? monthOf(plan, room[3]) : room[5] ? monthOf(plan, room[5]) : b.start) + 1;
-      if (from !== b.start || to !== (a.beyond ? b.end : Math.min(a.start, b.end))) return false;
-      // Each item named was booked before the subject and, in some month of the window, put
-      // less on the carrier here than in the looser schedule.
-      const order = bookingOrder(plan);
-      const on = (s: Schedule, id: string, m: number) => s.bookings.filter((x) => x.item === id && x.carrier === carrier && x.month === m).reduce((n, x) => n + x.fte, 0);
-      for (const [, id] of (room[2] ?? "").matchAll(/"([^"]+)"/g)) {
-        if (order.indexOf(id) >= order.indexOf(f.subject)) return false;
-        let less = 0;
-        for (let m = from; m < to; m++) less += Math.max(0, on(loose, id, m) - on(tight, id, m));
-        if (!(less > 1e-9)) return false;
+      if (room[2] !== undefined) {
+        // Rederive the attribution: over the months the item moved into, the cells (seat,
+        // month) its own demand lands on here; the work booked before it that puts less on
+        // those cells here than there; and, for the (at most three) items named, their seats
+        // and months. The hint must name exactly those.
+        const to = a.beyond ? b.end : Math.min(a.start, b.end);
+        const order = bookingOrder(plan);
+        const cells = new Set(tight.bookings.filter((x) => x.item === f.subject && x.carrier !== "external" && x.month < to).map((x) => `${x.carrier}|${x.month}`));
+        const load = (s: Schedule, id: string, cellKey: string) => s.bookings.filter((x) => x.item === id && `${x.carrier}|${x.month}` === cellKey).reduce((n, x) => n + x.fte, 0);
+        const names = [...room[2].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+        const seats = new Set<string>();
+        const months = new Set<number>();
+        for (const id of names) {
+          if (order.indexOf(id) >= order.indexOf(f.subject)) return false;
+          let any = false;
+          for (const c of cells) {
+            if (load(loose, id, c) - load(tight, id, c) > 1e-9) {
+              any = true;
+              seats.add(c.split("|")[0]);
+              months.add(Number(c.split("|")[1]));
+            }
+          }
+          if (!any) return false;
+        }
+        const listedSeats = room[3].split(/, | and /);
+        const listedMonths = new Set<number>();
+        for (const [, from, until] of room[4].matchAll(/(\d{4}-\d{2})(?: to (\d{4}-\d{2}))?/g)) {
+          for (let m = monthOf(plan, from); m <= monthOf(plan, until ?? from); m++) listedMonths.add(m);
+        }
+        if (JSON.stringify([...seats].sort()) !== JSON.stringify([...listedSeats].sort())) return false;
+        if (JSON.stringify([...months].sort((x, y) => x - y)) !== JSON.stringify([...listedMonths].sort((x, y) => x - y))) return false;
       }
     }
     if (!pred && !room && (a.binding.kind === "capacity" || a.binding.kind === "hire" || a.binding.kind === "predecessor")) return false;

@@ -137,7 +137,7 @@ describe("W117: an item that starts earlier in a scenario that only tightens ano
         severity: "info",
         subject: "b",
         message: '"b" starts 3 months earlier here (2027-10) than under "Leveled" (2028-01), though this scenario only tightens that one.',
-        hint: 'Under "Leveled" it waited for room on s0; here "c" put less there from 2027-10 to 2027-12. Leveling is a serial heuristic: work a tighter scenario delays can leave room that this item takes. Read the move as a side effect of the scenario, not a gain.',
+        hint: 'Under "Leveled" it waited for room on s0; here "c", booked before it, put less on s0 in 2027-12. Leveling is a serial heuristic: work a tighter scenario delays can leave room that this item takes. Read the move as a side effect of the scenario, not a gain.',
       },
     ]);
   });
@@ -155,7 +155,7 @@ describe("W117: an item that starts earlier in a scenario that only tightens ano
       ["c", '"c" starts 1 month earlier here (2027-01) than under "Lighter" (2027-02), though this scenario only tightens that one.'],
       ["e", '"e" starts 1 month earlier here (2027-03) than under "Lighter" (2027-04), though this scenario only tightens that one.'],
     ]);
-    expect(found[0].hint).toMatch(/^Under "Lighter" it waited for room on s0; here "b" put less there in 2027-01\. /);
+    expect(found[0].hint).toMatch(/^Under "Lighter" it waited for room on s0; here "b", booked before it, put less on s0 in 2027-01\. /);
     expect(found[1].hint).toMatch(/^Under "Lighter" it waited for "c", which ends earlier here\. /);
   });
 
@@ -167,6 +167,25 @@ describe("W117: an item that starts earlier in a scenario that only tightens ano
     expect(late.findings.filter((f) => f.code === "W117").map((f) => f.subject)).toEqual(["b"]);
     expect(late.counts.info).toBe(late.findings.filter((f) => f.severity === "info").length);
     expect(report(plan, "late").scenarios[0].findings.filter((f) => f.code === "W117")).toEqual(late.findings.filter((f) => f.code === "W117"));
+  });
+
+  it("compares with the nearest scenarios whatever order the plan lists them in", () => {
+    // P and Q schedule alike (b never fits), R lets b in, and B tightens all three. Q, a later
+    // hire, sits between P and B, so P is not nearest; Q is, since B does not reach it through R.
+    const plan: Plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 8, fundingYearStartMonth: 0 },
+      seats: [role("s0", { hireMonths: [2], capacityFte: 1.5 })],
+      items: [work("a", 4, 3, 1.5, { priority: -1 }), work("b", 3, 2, 0.3)],
+    });
+    const P = scenario("P");
+    const Q = scenario("Q", { hireDelay: { s0: 2 } });
+    const R = scenario("R", { durationScale: 1.5 });
+    const B = scenario("B", { durationScale: 1.5, hireDelay: { s0: 2 } });
+    for (const order of [[P, Q, R, B], [Q, P, R, B], [R, Q, P, B]]) {
+      expect(tightenedFrom(plan, order, B).map((s) => s.id).sort()).toEqual(["Q", "R"]);
+      const found = report({ ...plan, scenarios: order }, "B").scenarios[0].findings.filter((f) => f.code === "W117");
+      expect(found.map((f) => [f.subject, f.message])).toEqual([["b", '"b" fits inside the horizon here, from 2027-05, but not under "Q", though this scenario only tightens that one.']]);
+    }
   });
 
   it("stays silent as planned, where a tighter scenario never starts anything earlier", () => {
