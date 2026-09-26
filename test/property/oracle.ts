@@ -220,8 +220,9 @@ function blockedBindingProblem(ctx: Ctx, load: Load, i: WorkItem, t: number, b: 
   if (!on.some((p) => p.seat === b.seat)) return `binding names seat ${b.seat}, whose demand does not land on ${b.carrier} in month ${f.month} (seats there: ${on.map((p) => p.seat).join(",")})`;
   const asking = on.filter((p) => p.fte > EPS);
   const unhired = hiredAt(ctx.hires[b.carrier]?.months ?? [], f.month) === 0;
-  // Standing work in the horizon's last month is capacity: a later start drops that month.
-  const kind = unhired && asking.length > 0 && (!i.standing || f.month + 1 < ctx.H) ? "hire" : "capacity";
+  // Standing work short only in the horizon's last month is capacity, unless it is the last
+  // start there is: a later start drops that month, so the item may fit with no hire.
+  const kind = unhired && asking.length > 0 && (!i.standing || f.month + 1 < ctx.H || t === ctx.H - 1) ? "hire" : "capacity";
   if (b.kind !== kind) return `binding kind ${b.kind}, but carrier ${b.carrier} in month ${f.month} is ${unhired ? "unhired" : "hired"} and ${asking.length ? "asked for" : "asked for nothing"}: expected ${kind}`;
   if (kind === "hire" && !asking.some((p) => p.seat === b.seat)) return `hire binding names seat ${b.seat}, which asks nothing of ${b.carrier} in month ${f.month}`;
   return null;
@@ -326,9 +327,10 @@ const pred = (pd: Scheduled, lag = 0): number => (pd.item.standing ? pd.start + 
  *              start fits
  * P2.complete  leveling put nothing beyond the horizon that fits somewhere from its readiness
  * P2.beyond-label  the horizon label is never used when capacity, not time, kept the item out
- * P2.hire     a hire binding keeps its promise: the role carrying the demand at the start is
- *              first hired that month, or, beyond the horizon, nobody on the seat's chain is
- *              hired by the last month the run could start
+ * P2.hire     a hire binding keeps its promise: nobody on the seat's chain is hired by the
+ *              first short month of the last start refused; for a scheduled item the first of
+ *              them is hired the month after it, at or after the start; beyond the horizon, no
+ *              later start fits inside it
  */
 export function checkSchedule(plan: Plan, sc: Scenario, S: Schedule): { violations: Violation[]; coverage: Coverage } {
   const v: Violation[] = [];
