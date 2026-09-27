@@ -10,6 +10,7 @@ import {
   schedule,
   slips,
   type Plan,
+  type Schedule,
   type SeatDef,
   type WorkItem,
 } from "../src/index";
@@ -615,6 +616,35 @@ describe("demand profiles", () => {
     expect(delayed.hires.x).toEqual([3, 0, 0]);
     expect(delayed.hireIndex.x).toEqual([0, 1, 2]);
     expect(delayed.loads[0].capacity.slice(0, 4)).toEqual([2, 2, 2, 3]);
+  });
+
+  it("without hireIndex, costs a hire by position only while the role keeps every hire", () => {
+    // The role's rate (36k, then 48k in funding year 2) differs from both hires' own (12k, 24k),
+    // so each price says which one was used.
+    const plan = fixture({
+      calendar: { startYear: 2027, startMonth: 1, horizonMonths: 13, fundingYearStartMonth: 0 },
+      seats: [role("x", { loadedAnnual: 36_000, loadedAnnualByYear: [36_000, 48_000], hireMonths: [0, 0], loadedAnnualByHire: [[12_000], [24_000]] })],
+    });
+    const unindexed = (s: Schedule) => ({ ...s, hireIndex: undefined }) as unknown as Schedule;
+    // Every hire kept: position is the declared index, a per-hire delay included.
+    const kept = schedule(plan, AS_PLANNED);
+    expect(ledger(plan, unindexed(kept)).labor[0]).toBeCloseTo(3_000, 9); // 12k + 24k
+    expect(ledger(plan, { ...kept, hireIndex: null } as unknown as Schedule).labor[0]).toBeCloseTo(3_000, 9); // null is no index either
+    const delayed = unindexed(schedule(plan, { ...AS_PLANNED, id: "p", hireDelay: { x: [3, 0] } }));
+    expect(ledger(plan, delayed).labor[0]).toBeCloseTo(2_000, 9); // the 24k hire; the 12k one lands in month 3
+    expect(ledger(plan, delayed).labor[3]).toBeCloseTo(3_000, 9);
+    // After a drop, position would price the kept 24k hire at the dropped 12k hire's rate.
+    const dropped = schedule(plan, { ...AS_PLANNED, id: "d", dropHires: { x: [0] } });
+    expect(ledger(plan, dropped).labor[0]).toBeCloseTo(2_000, 9); // hireIndex names the 24k hire
+    const l = ledger(plan, unindexed(dropped));
+    expect(l.labor[0]).toBeCloseTo(3_000, 9); // the role's rate, not the dropped hire's 1,000
+    expect(l.labor[12]).toBeCloseTo(4_000, 9); // the role's own year-2 rate
+    expect(l.headcount[0]).toBe(1);
+    // An entry that names only some hires keeps their own rates; a hire it leaves out takes the role's.
+    expect(ledger(plan, { ...kept, hireIndex: { x: [1] } }).labor[0]).toBeCloseTo(5_000, 9); // the 24k hire, then the role's 36k
+    // A hireIndex that lacks the seat is no index for it, even when the seat's id is an Object.prototype key.
+    const proto = fixture({ seats: [{ ...plan.seats[0], id: "constructor" }] });
+    expect(ledger(proto, { ...schedule(proto, AS_PLANNED), hireIndex: {} }).labor[0]).toBeCloseTo(3_000, 9); // 12k + 24k by position
   });
 
   it("an unhired leadership seat cannot absorb: its item waits for the hire when leveling", () => {

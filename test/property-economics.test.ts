@@ -1,8 +1,9 @@
 import fc from "fast-check";
 import { describe, it } from "vitest";
-import { ledger, monthLabel, report, schedule, type Plan, type Scenario } from "../src/index";
+import { ledger, monthLabel, report, schedule, type Plan, type Scenario, type Schedule } from "../src/index";
 import { ECON, arbRawPlan, arbRawScenario, buildPlan, buildScenario, compactEconomics, compactPlan, compactScenario, type RawPlan, type RawScenario } from "./property/arbitraries";
-import { oracleLedger } from "./property/ledger-oracle";
+import { hireCost, oracleLedger, roleCost } from "./property/ledger-oracle";
+import { specHires } from "./property/oracle";
 import { Admission, TIMEOUT, expectCoverage, holds } from "./property/run";
 
 // P5, economics conservation: the ledger and the report agree, month by month and period by
@@ -134,3 +135,86 @@ describe("P5 economics conservation, against an independent ledger", () => {
     expectCoverage("months before the funding year opens", hits.preFunding, runs, 0.3);
   }, TIMEOUT);
 });
+
+// P5.unindexed: a schedule without hireIndex (hand-built, or cast from one) cannot say which
+// declared hire each effective hire is. The ledger then prices a role by position only while
+// the role keeps every hire, and otherwise at the role's own rate for each hire, never at the
+// rate of a hire the scenario dropped. Headcount and the rows that do not involve labor are the
+// same with or without hireIndex, and a plan where every role keeps every hire gets the same
+// ledger either way.
+
+interface UnindexedSeen {
+  /** A role with per-hire rates dropped a hire and keeps at least one. */
+  dropped: boolean;
+  /** The ledger's labor without hireIndex differs from the ledger's with it. */
+  changed: boolean;
+}
+
+function unindexedProblems(plan: Plan, sc: Scenario, seen?: UnindexedSeen): string[] {
+  const out: string[] = [];
+  const H = plan.calendar.horizonMonths;
+  const S = schedule(plan, sc);
+  const L = ledger(plan, S);
+  const U = ledger(plan, { ...S, hireIndex: undefined } as unknown as Schedule);
+  const hires = specHires(plan, sc);
+  const want = new Array<number>(H).fill(0);
+  let everyHireKept = true;
+  for (const s of plan.seats) {
+    const { months, index } = hires[s.id];
+    const kept = months.length === s.hireMonths.length;
+    if (!kept) everyHireKept = false;
+    if (seen && !kept && s.loadedAnnualByHire && months.length > 0) seen.dropped = true;
+    months.forEach((h, j) => {
+      for (let m = Math.max(0, h); m < H; m++) want[m] += kept ? hireCost(plan, s, index[j], m) : roleCost(plan, s, m);
+    });
+  }
+  for (let m = 0; m < H; m++) {
+    if (!close(U.labor[m], want[m])) {
+      out.push(`labor[${m}] without hireIndex: engine ${U.labor[m]}, rule ${want[m]}`);
+      break;
+    }
+  }
+  for (const r of ["headcount", "nonLabor", "burn", "revenue", "funding"] as const) {
+    if (JSON.stringify(U[r]) !== JSON.stringify(L[r])) out.push(`${r} without hireIndex differs from ${r} with it`);
+  }
+  if (everyHireKept && JSON.stringify(U) !== JSON.stringify(L)) out.push("every role keeps every hire, yet the ledger without hireIndex differs");
+  if (seen && JSON.stringify(U.labor) !== JSON.stringify(L.labor)) seen.changed = true;
+  return out;
+}
+
+describe("P5.unindexed, a schedule without hireIndex", () => {
+  it("P5.unindexed: labor is by position while a role keeps every hire, else at the role's rate; nothing else changes", () => {
+    const admission = new Admission();
+    const hits = { dropped: 0, changed: 0 };
+    const build = ([rp, rs]: [RawPlan, RawScenario]) => {
+      const plan = buildPlan(rp);
+      return { plan, sc: buildScenario(plan, rs) };
+    };
+    const result = holds(
+      fc.tuple(arbRawPlan(ECON), arbRawScenario({ overrides: true })),
+      (raw) => {
+        const { plan, sc } = build(raw);
+        admission.admit(plan, sc);
+        const seen: UnindexedSeen = { dropped: false, changed: false };
+        const ok = unindexedProblems(plan, sc, seen).length === 0;
+        if (seen.dropped) hits.dropped++;
+        if (seen.changed) hits.changed++;
+        return ok;
+      },
+      (raw) => {
+        const { plan, sc } = build(raw);
+        return [
+          `plan:      ${JSON.stringify(compactPlan(plan))}`,
+          `economics: ${JSON.stringify(compactEconomics(plan))}`,
+          `scenario:  ${JSON.stringify(compactScenario(sc))}`,
+          ...unindexedProblems(plan, sc).map((x) => `  -> ${x}`),
+        ].join("\n");
+      },
+    );
+    admission.expectFewSkipped();
+    const runs = result.numRuns;
+    expectCoverage("a role with per-hire rates that dropped a hire and keeps one", hits.dropped, runs, 0.1);
+    expectCoverage("labor that changes without hireIndex", hits.changed, runs, 0.08);
+  }, TIMEOUT);
+});
+
