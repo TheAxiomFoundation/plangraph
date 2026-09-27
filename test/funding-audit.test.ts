@@ -5,6 +5,8 @@ import {
   atFundingYearEnd,
   beforeFunding,
   byFundingYear,
+  fmtFixed,
+  fmtUsd,
   fundingYears,
   ledger,
   monthlyLoaded,
@@ -159,5 +161,75 @@ describe("defensive funding-clock audit", () => {
 
     expect(monthly.cash).toHaveLength(plan.calendar.horizonMonths);
     expect(monthly.cash.every((cash) => cash === 1_234)).toBe(true);
+  });
+});
+
+describe("figures for display depend on the sum, not on the order it was added in", () => {
+  it("fmtFixed snaps to eight decimals, then rounds half away from zero", () => {
+    // The two orders of the same 14.025 FTE-months, and a sum that lands exactly on it.
+    expect([14.024999999999999, 14.025, 14.025000000000002].map((x) => fmtFixed(x, 2))).toEqual(["14.03", "14.03", "14.03"]);
+    expect([14.024999999999999, 14.025000000000002].map((x) => x.toFixed(2))).toEqual(["14.02", "14.03"]);
+    // Within the harness's 1e-9 slack of a half is at the half.
+    expect([14.0249999993, 14.0250000007].map((x) => fmtFixed(x, 2))).toEqual(["14.03", "14.03"]);
+    expect(fmtFixed(14.02499999, 2)).toBe("14.02");
+    // 0.145 is stored just under itself, so toFixed shows 0.14.
+    expect(fmtFixed(0.145, 2)).toBe("0.15");
+    // Sums that drifted just under a half.
+    expect(fmtFixed(1.2499999999999998, 1)).toBe("1.3");
+    expect(fmtFixed(12.649999999999999, 1)).toBe("12.7");
+    expect(fmtFixed(-1.2349999999999999, 2)).toBe("-1.24");
+    // Exact halves and full precision, where toFixed already agrees.
+    expect([fmtFixed(2.5, 0), fmtFixed(-2.5, 0), fmtFixed(1.5, 0), fmtFixed(0.1, 7)]).toEqual(["3", "-3", "2", "0.1000000"]);
+  });
+
+  it("fmtFixed keeps the sign of a snapped value below zero, and drops drift around zero", () => {
+    // A dollar short of zero, in millions, still reads as a negative trough.
+    expect(fmtFixed(-0.000001, 2)).toBe("-0.00");
+    expect(fmtFixed(-1e-15, 2)).toBe("0.00");
+    expect(fmtFixed(0, 2)).toBe("0.00");
+    expect(fmtFixed(-0, 2)).toBe("0.00");
+    expect(Number(fmtFixed(-0.3, 0))).toBe(-0);
+  });
+
+  it("fmtFixed shows what it cannot snap as toFixed does, and refuses digits it cannot round to", () => {
+    expect(fmtFixed(1e21, 2)).toBe("1e+21");
+    expect(fmtFixed(1e16 + 2, 0)).toBe("10000000000000002");
+    expect(fmtFixed(1e10 + 0.5, 0)).toBe((1e10 + 0.5).toFixed(0));
+    expect(fmtFixed(Number.NaN, 2)).toBe("NaN");
+    expect(fmtFixed(Number.POSITIVE_INFINITY, 1)).toBe("Infinity");
+    for (const digits of [-1, 8, 1.5, Number.NaN]) expect(() => fmtFixed(1, digits)).toThrow("plangraph: fmtFixed takes 0 to 7 digits");
+  });
+
+  it("fmtUsd rounds millions and thousands the same way, and picks the unit after rounding", () => {
+    expect(fmtUsd(1_234_999.9999999998)).toBe("$1.24M");
+    expect(fmtUsd(1_235_000)).toBe("$1.24M");
+    expect(fmtUsd(-1_235_000)).toBe("$-1.24M");
+    expect(fmtUsd(2_500)).toBe("$3k");
+    expect(fmtUsd(-2_500)).toBe("$-3k");
+    expect(fmtUsd(-400)).toBe("$0k");
+    // A million added up a hair short, and 999,500, round to a thousand thousand.
+    expect([fmtUsd(999_999.9999999999), fmtUsd(1_000_000), fmtUsd(999_500), fmtUsd(-999_500)]).toEqual(["$1.00M", "$1.00M", "$1.00M", "$-1.00M"]);
+    expect(fmtUsd(999_499)).toBe("$999k");
+  });
+
+  it("names the first month of a cash trough that repeats, in every order of seats", () => {
+    // A grant pays February's payroll exactly, so January and February end with the same cash;
+    // added up seat by seat, February comes out a hair lower in some orders of seats.
+    const seats = [165_927.72, 102_866.52, 161_847];
+    const orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    const plans = orders.map((order) =>
+      fixture({
+        calendar: { startYear: 2027, startMonth: 1, horizonMonths: 12, fundingYearStartMonth: 0 },
+        seats: order.map((k) => ({ id: `s${k}`, title: `s${k}`, loadedAnnual: seats[k], costBasis: "A" as const, hireMonths: [0], capacityFte: 1, fallback: null })),
+        funding: [{ id: "grant", label: "grant", byMonth: [0, 35_886.77, 1_000_000], basis: "A", note: "audit fixture", counted: true }],
+      }),
+    );
+    expect(plans.some((plan) => {
+      const cash = ledger(plan, schedule(plan, AS_PLANNED)).cash;
+      return cash[1] < cash[0];
+    })).toBe(true);
+    const troughs = plans.map((plan) => report(plan).scenarios[0].cashTrough);
+    expect(new Set(troughs.map((t) => t.month))).toEqual(new Set(["2027-01"]));
+    expect(new Set(troughs.map((t) => fmtFixed(t.usd / 1e6, 2)))).toEqual(new Set(["-0.04"]));
   });
 });

@@ -40,6 +40,12 @@ export interface Report {
   errors: number;
 }
 
+/**
+ * Cash within half a cent of the lowest so far is the same trough, as W105 counts cash within
+ * half a cent of zero as zero: the first month keeps it, whatever order payroll was added in.
+ */
+const CASH_SLACK = 0.005;
+
 export function report(plan: Plan, only?: string): Report {
   const cal = plan.calendar;
   const years = fundingYears(cal);
@@ -66,7 +72,7 @@ export function report(plan: Plan, only?: string): Report {
     let trough = l.cash[0] ?? plan.openingCash ?? 0;
     let troughMonth = 0;
     for (let m = 1; m < l.cash.length; m++) {
-      if (l.cash[m] < trough) {
+      if (l.cash[m] < trough - CASH_SLACK) {
         trough = l.cash[m];
         troughMonth = m;
       }

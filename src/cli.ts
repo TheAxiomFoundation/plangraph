@@ -8,6 +8,7 @@
 
 import { watch as watchDir } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
+import { fmtFixed } from "./economics.js";
 import { monthLabel, scenariosOf } from "./model.js";
 import { loadPlanFile } from "./node.js";
 import { PlanParseError } from "./parse.js";
@@ -108,9 +109,9 @@ function check(): 0 | 1 | 2 {
     return r.errors ? 1 : 0;
   }
 
-  const M = (n: number) => (n / 1e6).toFixed(2).padStart(7);
+  const M = (n: number) => fmtFixed(n / 1e6, 2).padStart(7);
   const row = (label: string, xs: number[]) =>
-    `  ${label.padEnd(24)}${xs.map(M).join(" ")}   | ${r.years}y ${(xs.reduce((a, b) => a + b, 0) / 1e6).toFixed(2)}`;
+    `  ${label.padEnd(24)}${xs.map(M).join(" ")}   | ${r.years}y ${fmtFixed(xs.reduce((a, b) => a + b, 0) / 1e6, 2)}`;
   const H = plan.calendar.horizonMonths;
   const seats = plan.seats.reduce((n, s) => n + s.hireMonths.length, 0);
   console.log(
@@ -124,12 +125,12 @@ function check(): 0 | 1 | 2 {
     console.log(row("Cost ($M)", s.costByYear));
     console.log(row("Revenue", s.revenueByYear));
     console.log(row("Funding counted", s.fundingByYear));
-    console.log(`  ${"External FTE-months".padEnd(24)}${s.externalFteMonths.toFixed(2)}`);
-    console.log(`  ${"Cash trough".padEnd(24)}${(s.cashTrough.usd / 1e6).toFixed(2)}M in ${s.cashTrough.month}`);
+    console.log(`  ${"External FTE-months".padEnd(24)}${fmtFixed(s.externalFteMonths, 2)}`);
+    console.log(`  ${"Cash trough".padEnd(24)}${fmtFixed(s.cashTrough.usd / 1e6, 2)}M in ${s.cashTrough.month}`);
     console.log(`  ${"Unlocks".padEnd(24)}${Object.entries(s.unlocks).map(([k, v]) => `${k} ${v ?? "never"}`).join(" · ") || "no streams"}`);
     const top = s.slips.slice(0, 8).map((x) => `${x.label} ${x.beyond ? "beyond horizon" : `${x.months > 0 ? "+" : ""}${x.months}`}`).join(" · ");
     console.log(`  ${"Slips vs baseline".padEnd(24)}${s.slips.length ? top : "none"}${s.slips.length > 8 ? ` · +${s.slips.length - 8} more` : ""}`);
-    console.log(`  ${"Over capacity".padEnd(24)}${s.overloads.length ? s.overloads.slice(0, 5).map((o) => `${o.seat} ${o.months} mo (peak +${o.peak.toFixed(2)})`).join(" · ") : "none"}`);
+    console.log(`  ${"Over capacity".padEnd(24)}${s.overloads.length ? s.overloads.slice(0, 5).map((o) => `${o.seat} ${o.months} mo (peak +${fmtFixed(o.peak, 2)})`).join(" · ") : "none"}`);
     console.log(`  ${"Findings".padEnd(24)}${s.counts.error} errors · ${s.counts.warn} warnings · ${s.counts.info} info`);
     for (const f of s.findings.filter((x) => x.severity !== "info")) {
       console.log(`    ${f.code} ${f.subject.padEnd(12)} ${f.message}`);
